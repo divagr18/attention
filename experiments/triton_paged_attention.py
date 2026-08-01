@@ -168,6 +168,62 @@ def paged_gather_decode_attention(query: torch.Tensor, keys: torch.Tensor, value
     return output
 
 
+@triton.jit
+def span_gather_decode_attention_kernel(
+    query_ptr, key_ptr, value_ptr, centers_ptr, output_ptr,
+    scale: tl.constexpr, context: tl.constexpr, local_window: tl.constexpr,
+    top_tokens: tl.constexpr, span_width: tl.constexpr, heads: tl.constexpr,
+    head_dim: tl.constexpr, block_candidates: tl.constexpr, block_dim: tl.constexpr,
+):
+    program = tl.program_id(axis=0)
+    batch = program // heads
+    dims = tl.arange(0, block_dim)
+    query = tl.load(query_ptr + program * head_dim + dims, mask=dims < head_dim, other=0.0).to(tl.float32)
+    candidates = local_window + top_tokens * span_width
+    historical = context - local_window
+    running_max = -float("inf")
+    running_sum = 0.0
+    accumulator = tl.zeros((block_dim,), tl.float32)
+    for start in range(0, candidates, block_candidates):
+        offsets = start + tl.arange(0, block_candidates)
+        local = offsets < local_window
+        span_offsets = offsets - local_window
+        center_ids = span_offsets // span_width
+        centers = tl.load(centers_ptr + batch * top_tokens + center_ids, mask=(~local) & (offsets < candidates), other=0)
+        token_indices = tl.where(local, historical + offsets, centers + span_offsets % span_width)
+        mask = (offsets[:, None] < candidates) & (dims[None, :] < head_dim)
+        base = (program * context + token_indices[:, None]) * head_dim + dims[None, :]
+        keys = tl.load(key_ptr + base, mask=mask, other=0.0).to(tl.float32)
+        values = tl.load(value_ptr + base, mask=mask, other=0.0).to(tl.float32)
+        scores = tl.sum(keys * query[None, :], axis=1) * scale
+        scores = tl.where(offsets < candidates, scores, -float("inf"))
+        block_max = tl.max(scores, axis=0)
+        new_max = tl.maximum(running_max, block_max)
+        probabilities = tl.exp(scores - new_max)
+        rescale = tl.exp(running_max - new_max)
+        accumulator = accumulator * rescale + tl.sum(values * probabilities[:, None], axis=0)
+        running_sum = running_sum * rescale + tl.sum(probabilities, axis=0)
+        running_max = new_max
+    tl.store(output_ptr + program * head_dim + dims, accumulator / running_sum, mask=dims < head_dim)
+
+
+def span_gather_decode_attention(query: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, centers: torch.Tensor, *, local_window: int, span_width: int) -> torch.Tensor:
+    """Fused local attention plus short spans beginning at selected centers."""
+    batch, heads, head_dim = query.shape
+    if not (query.is_contiguous() and keys.is_contiguous() and values.is_contiguous() and centers.is_contiguous()):
+        raise ValueError("contiguous CUDA tensors are required")
+    if centers.shape[0] != batch or head_dim > 64:
+        raise ValueError("invalid centers or head dimension")
+    output = torch.empty_like(query)
+    span_gather_decode_attention_kernel[(batch * heads,)](
+        query, keys, values, centers, output, scale=head_dim**-0.5,
+        context=keys.size(2), local_window=local_window, top_tokens=centers.size(1),
+        span_width=span_width, heads=heads, head_dim=head_dim,
+        block_candidates=128, block_dim=triton.next_power_of_2(head_dim), num_warps=4,
+    )
+    return output
+
+
 def reference_attention(query: torch.Tensor, keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
     # Keep the reference in the same FP16 tensor-core regime as the decode
     # baselines.  The fused kernel still accumulates internally in FP32.
