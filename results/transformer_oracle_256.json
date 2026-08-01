@@ -1,0 +1,70 @@
+{
+  "config": {
+    "variant": "oracle",
+    "context": 256,
+    "local_window": 32,
+    "batch_size": 32,
+    "steps": 2000,
+    "eval_batches": 64,
+    "d_model": 64,
+    "layers": 2,
+    "heads": 4,
+    "learning_rate": 0.001,
+    "seed": 7,
+    "device": "cuda"
+  },
+  "parameters": 149248,
+  "elapsed_seconds": 46.28080599999521,
+  "history": [
+    {
+      "step": 1,
+      "loss": 4.327645778656006
+    },
+    {
+      "step": 200,
+      "loss": 4.260103702545166
+    },
+    {
+      "step": 400,
+      "loss": 0.3712492883205414
+    },
+    {
+      "step": 600,
+      "loss": 0.04892238229513168
+    },
+    {
+      "step": 800,
+      "loss": 0.02535548061132431
+    },
+    {
+      "step": 1000,
+      "loss": 0.013713352382183075
+    },
+    {
+      "step": 1200,
+      "loss": 0.009669684804975986
+    },
+    {
+      "step": 1400,
+      "loss": 0.005694150924682617
+    },
+    {
+      "step": 1600,
+      "loss": 0.006148647516965866
+    },
+    {
+      "step": 1800,
+      "loss": 0.003154223319143057
+    },
+    {
+      "step": 2000,
+      "loss": 0.00289732264354825
+    }
+  ],
+  "evaluation": {
+    "accuracy": 1.0,
+    "accuracy_near": 1.0,
+    "accuracy_medium": 1.0,
+    "accuracy_far": 1.0
+  }
+}

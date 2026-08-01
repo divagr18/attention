@@ -1,0 +1,70 @@
+{
+  "config": {
+    "variant": "sliding",
+    "context": 256,
+    "local_window": 32,
+    "batch_size": 32,
+    "steps": 2000,
+    "eval_batches": 64,
+    "d_model": 64,
+    "layers": 2,
+    "heads": 4,
+    "learning_rate": 0.001,
+    "seed": 7,
+    "device": "cuda"
+  },
+  "parameters": 149248,
+  "elapsed_seconds": 43.91319029999431,
+  "history": [
+    {
+      "step": 1,
+      "loss": 4.328794002532959
+    },
+    {
+      "step": 200,
+      "loss": 4.2896599769592285
+    },
+    {
+      "step": 400,
+      "loss": 4.249991416931152
+    },
+    {
+      "step": 600,
+      "loss": 4.156065464019775
+    },
+    {
+      "step": 800,
+      "loss": 4.161368370056152
+    },
+    {
+      "step": 1000,
+      "loss": 4.187302589416504
+    },
+    {
+      "step": 1200,
+      "loss": 4.160403251647949
+    },
+    {
+      "step": 1400,
+      "loss": 4.181883811950684
+    },
+    {
+      "step": 1600,
+      "loss": 4.205057144165039
+    },
+    {
+      "step": 1800,
+      "loss": 4.166770935058594
+    },
+    {
+      "step": 2000,
+      "loss": 4.140079975128174
+    }
+  ],
+  "evaluation": {
+    "accuracy": 0.0146484375,
+    "accuracy_near": 0.01650943396226415,
+    "accuracy_medium": 0.019777503090234856,
+    "accuracy_far": 0.008588957055214725
+  }
+}

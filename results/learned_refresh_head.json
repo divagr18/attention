@@ -1,0 +1,12 @@
+{
+  "training_steps": 800,
+  "noise_std": 0.05,
+  "threshold": 0.5,
+  "refreshes_per_episode": 8.0,
+  "routing_fraction": 0.125,
+  "fresh_accuracy": 1.0,
+  "cached_accuracy": 1.0,
+  "cache_matches_fresh_router": 1.0,
+  "gate_refresh_precision": 1.0,
+  "gate_refresh_recall": 1.0
+}

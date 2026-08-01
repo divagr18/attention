@@ -1,0 +1,44 @@
+{
+  "config": {
+    "context": 4096,
+    "local_window": 256,
+    "block_size": 256,
+    "top_blocks": 4,
+    "top_tokens": 1,
+    "batch_size": 8,
+    "heads": 4,
+    "head_dim": 16,
+    "iterations": 300,
+    "warmup": 30,
+    "seed": 7,
+    "device": "cuda"
+  },
+  "results": {
+    "dense": {
+      "mean_us": 245.9936678254356,
+      "p50_us": 221.09999554231763,
+      "p95_us": 403.2000433653593
+    },
+    "flat_retrieval": {
+      "mean_us": 566.7800017787764,
+      "p50_us": 559.3000096268952,
+      "p95_us": 611.299998126924
+    },
+    "hierarchical_retrieval": {
+      "mean_us": 872.1743353332082,
+      "p50_us": 865.599955432117,
+      "p95_us": 936.6999147459865
+    }
+  },
+  "dense_to_hierarchical_speedup": 0.2820464417030288,
+  "kv_cache_mib": 8.0,
+  "attention_score_workspace_mib": {
+    "dense": 0.25,
+    "candidate": 0.01580810546875
+  },
+  "routing_scores_per_query": {
+    "flat": 3840,
+    "hierarchical": 1039
+  },
+  "candidate_tokens": 259
+}

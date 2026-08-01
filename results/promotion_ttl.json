@@ -1,0 +1,35 @@
+{
+  "episodes": 8,
+  "steps_per_episode": 64,
+  "query_change_interval": 8,
+  "results": [
+    {
+      "ttl": 1,
+      "fresh_accuracy": 1.0,
+      "cached_accuracy": 1.0,
+      "accuracy_delta": 0.0,
+      "cache_matches_fresh_router": 1.0
+    },
+    {
+      "ttl": 4,
+      "fresh_accuracy": 1.0,
+      "cached_accuracy": 1.0,
+      "accuracy_delta": 0.0,
+      "cache_matches_fresh_router": 1.0
+    },
+    {
+      "ttl": 16,
+      "fresh_accuracy": 1.0,
+      "cached_accuracy": 0.509765625,
+      "accuracy_delta": -0.490234375,
+      "cache_matches_fresh_router": 0.5
+    },
+    {
+      "ttl": 64,
+      "fresh_accuracy": 1.0,
+      "cached_accuracy": 0.380859375,
+      "accuracy_delta": -0.619140625,
+      "cache_matches_fresh_router": 0.375
+    }
+  ]
+}

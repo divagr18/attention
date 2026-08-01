@@ -1,0 +1,32 @@
+{
+  "context": 4096,
+  "steps_per_episode": 16,
+  "episodes": 8,
+  "change_steps": [
+    3,
+    7,
+    12
+  ],
+  "results": {
+    "dense": {
+      "answer_accuracy": 0.0234375,
+      "mean_query_ms": 23.66372266351391,
+      "router_calls_per_episode": 0.0
+    },
+    "sliding": {
+      "answer_accuracy": 0.0,
+      "mean_query_ms": 25.197774216394464,
+      "router_calls_per_episode": 0.0
+    },
+    "routed_reroute": {
+      "answer_accuracy": 0.9765625,
+      "mean_query_ms": 26.53611250298127,
+      "router_calls_per_episode": 16.0
+    },
+    "routed_adaptive_promotion": {
+      "answer_accuracy": 0.9765625,
+      "mean_query_ms": 25.163407815853134,
+      "router_calls_per_episode": 4.0
+    }
+  }
+}

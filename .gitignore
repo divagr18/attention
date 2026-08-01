@@ -1,0 +1,7 @@
+.venv*/
+.wsl-cache/
+__pycache__/
+*.pyc
+ubuntu-*-export.tar
+results/*.pt
+results/*.log

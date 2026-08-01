@@ -1,0 +1,10 @@
+{
+  "context": 131072,
+  "window": 256,
+  "batch_size": 1,
+  "heads": 4,
+  "head_dim": 16,
+  "dense_prefill_mean_ms": 373.34983300000886,
+  "local_triton_prefill_mean_ms": 23.459176899984868,
+  "speedup": 15.914873509489997
+}

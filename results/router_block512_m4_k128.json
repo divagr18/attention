@@ -1,0 +1,217 @@
+{
+  "config": {
+    "cases": 1000,
+    "context_tokens": 8192,
+    "block_size": 512,
+    "top_blocks": 4,
+    "top_tokens": 128,
+    "seed": 7
+  },
+  "results": [
+    {
+      "strategy": "random",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 0.0124,
+        "block_recall": 0.06,
+        "mean_scores_evaluated": 16
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 848,
+          "token_recall": 0.012264150943396227,
+          "block_recall": 0.060141509433962265
+        },
+        "distance:medium": {
+          "cases": 152,
+          "token_recall": 0.013157894736842105,
+          "block_recall": 0.05921052631578947
+        },
+        "family:composition": {
+          "cases": 238,
+          "token_recall": 0.0058823529411764705,
+          "block_recall": 0.07563025210084033
+        },
+        "family:distractor": {
+          "cases": 260,
+          "token_recall": 0.007692307692307693,
+          "block_recall": 0.04230769230769231
+        },
+        "family:overwrite": {
+          "cases": 239,
+          "token_recall": 0.016736401673640166,
+          "block_recall": 0.06694560669456066
+        },
+        "family:passkey": {
+          "cases": 263,
+          "token_recall": 0.019011406844106463,
+          "block_recall": 0.057034220532319393
+        }
+      }
+    },
+    {
+      "strategy": "recency",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 0.0,
+        "block_recall": 0.0,
+        "mean_scores_evaluated": 16
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 848,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "distance:medium": {
+          "cases": 152,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:composition": {
+          "cases": 238,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:distractor": {
+          "cases": 260,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:overwrite": {
+          "cases": 239,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:passkey": {
+          "cases": 263,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        }
+      }
+    },
+    {
+      "strategy": "flat",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 0.36093333333333333,
+        "block_recall": 1.0,
+        "mean_scores_evaluated": 8192
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 848,
+          "token_recall": 0.3610849056603774,
+          "block_recall": 1.0
+        },
+        "distance:medium": {
+          "cases": 152,
+          "token_recall": 0.3600877192982456,
+          "block_recall": 1.0
+        },
+        "family:composition": {
+          "cases": 238,
+          "token_recall": 0.4142857142857143,
+          "block_recall": 1.0
+        },
+        "family:distractor": {
+          "cases": 260,
+          "token_recall": 0.3423076923076923,
+          "block_recall": 1.0
+        },
+        "family:overwrite": {
+          "cases": 239,
+          "token_recall": 0.35006973500697347,
+          "block_recall": 1.0
+        },
+        "family:passkey": {
+          "cases": 263,
+          "token_recall": 0.3409378960709759,
+          "block_recall": 1.0
+        }
+      }
+    },
+    {
+      "strategy": "hierarchical",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 0.38226666666666664,
+        "block_recall": 1.0,
+        "mean_scores_evaluated": 2064
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 848,
+          "token_recall": 0.38278301886792454,
+          "block_recall": 1.0
+        },
+        "distance:medium": {
+          "cases": 152,
+          "token_recall": 0.3793859649122807,
+          "block_recall": 1.0
+        },
+        "family:composition": {
+          "cases": 238,
+          "token_recall": 0.4226890756302521,
+          "block_recall": 1.0
+        },
+        "family:distractor": {
+          "cases": 260,
+          "token_recall": 0.37435897435897436,
+          "block_recall": 1.0
+        },
+        "family:overwrite": {
+          "cases": 239,
+          "token_recall": 0.3654114365411436,
+          "block_recall": 1.0
+        },
+        "family:passkey": {
+          "cases": 263,
+          "token_recall": 0.3688212927756654,
+          "block_recall": 1.0
+        }
+      }
+    },
+    {
+      "strategy": "oracle",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 1.0,
+        "block_recall": 1.0,
+        "mean_scores_evaluated": 0
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 848,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "distance:medium": {
+          "cases": 152,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "family:composition": {
+          "cases": 238,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "family:distractor": {
+          "cases": 260,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "family:overwrite": {
+          "cases": 239,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "family:passkey": {
+          "cases": 263,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        }
+      }
+    }
+  ]
+}

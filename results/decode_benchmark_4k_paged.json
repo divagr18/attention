@@ -1,0 +1,55 @@
+{
+  "config": {
+    "context": 4096,
+    "local_window": 256,
+    "block_size": 256,
+    "top_blocks": 4,
+    "top_tokens": 1,
+    "batch_size": 8,
+    "heads": 4,
+    "head_dim": 16,
+    "iterations": 300,
+    "warmup": 30,
+    "seed": 7,
+    "device": "cuda"
+  },
+  "results": {
+    "dense": {
+      "mean_us": 247.69533425569534,
+      "p50_us": 237.65000514686108,
+      "p95_us": 311.09992414712906
+    },
+    "flat_retrieval": {
+      "mean_us": 647.9156673109779,
+      "p50_us": 620.8000122569501,
+      "p95_us": 875.8999174460769
+    },
+    "hierarchical_retrieval": {
+      "mean_us": 955.018667348971,
+      "p50_us": 941.9999551028013,
+      "p95_us": 1121.1000382900238
+    },
+    "hierarchical_paged_blocks": {
+      "mean_us": 822.0403342663,
+      "p50_us": 791.7499751783907,
+      "p95_us": 997.0000246539712
+    }
+  },
+  "dense_to_hierarchical_speedup": {
+    "fine_token_path": 0.25936177241777997,
+    "paged_block_path": 0.301317738230901
+  },
+  "kv_cache_mib": 8.0,
+  "attention_score_workspace_mib": {
+    "dense": 0.25,
+    "candidate": 0.01580810546875
+  },
+  "routing_scores_per_query": {
+    "flat": 3840,
+    "hierarchical": 1039
+  },
+  "candidate_tokens": {
+    "fine_token_path": 259,
+    "paged_block_path": 1280
+  }
+}

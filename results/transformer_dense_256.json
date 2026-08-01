@@ -1,0 +1,70 @@
+{
+  "config": {
+    "variant": "dense",
+    "context": 256,
+    "local_window": 32,
+    "batch_size": 32,
+    "steps": 2000,
+    "eval_batches": 64,
+    "d_model": 64,
+    "layers": 2,
+    "heads": 4,
+    "learning_rate": 0.001,
+    "seed": 7,
+    "device": "cuda"
+  },
+  "parameters": 149248,
+  "elapsed_seconds": 40.402371800038964,
+  "history": [
+    {
+      "step": 1,
+      "loss": 4.332912445068359
+    },
+    {
+      "step": 200,
+      "loss": 4.287309169769287
+    },
+    {
+      "step": 400,
+      "loss": 4.249885082244873
+    },
+    {
+      "step": 600,
+      "loss": 4.124316215515137
+    },
+    {
+      "step": 800,
+      "loss": 3.615166187286377
+    },
+    {
+      "step": 1000,
+      "loss": 2.327009916305542
+    },
+    {
+      "step": 1200,
+      "loss": 0.9495981931686401
+    },
+    {
+      "step": 1400,
+      "loss": 0.8014103174209595
+    },
+    {
+      "step": 1600,
+      "loss": 0.36813244223594666
+    },
+    {
+      "step": 1800,
+      "loss": 0.34186267852783203
+    },
+    {
+      "step": 2000,
+      "loss": 0.2866656184196472
+    }
+  ],
+  "evaluation": {
+    "accuracy": 0.9228515625,
+    "accuracy_near": 0.9504716981132075,
+    "accuracy_medium": 0.9085290482076638,
+    "accuracy_far": 0.9226993865030675
+  }
+}

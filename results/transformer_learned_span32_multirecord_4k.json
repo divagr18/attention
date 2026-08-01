@@ -1,0 +1,79 @@
+{
+  "config": {
+    "variant": "learned",
+    "context": 4096,
+    "local_window": 64,
+    "batch_size": 2,
+    "steps": 600,
+    "eval_batches": 32,
+    "d_model": 64,
+    "layers": 1,
+    "heads": 4,
+    "learning_rate": 0.0005,
+    "block_size": 64,
+    "top_blocks": 1,
+    "top_tokens": 1,
+    "router_loss_weight": 1.0,
+    "task_family": "multirecord",
+    "seed": 7,
+    "device": "cuda",
+    "retrieval_unit": "span",
+    "retrieval_width": 32
+  },
+  "parameters": 353216,
+  "elapsed_seconds": 81.36269089998677,
+  "history": [
+    {
+      "step": 1,
+      "loss": 0.013486097566783428
+    },
+    {
+      "step": 60,
+      "loss": 0.008903084322810173
+    },
+    {
+      "step": 120,
+      "loss": 0.018298804759979248
+    },
+    {
+      "step": 180,
+      "loss": 0.010228855535387993
+    },
+    {
+      "step": 240,
+      "loss": 0.011055080220103264
+    },
+    {
+      "step": 300,
+      "loss": 0.020948000252246857
+    },
+    {
+      "step": 360,
+      "loss": 0.004510149359703064
+    },
+    {
+      "step": 420,
+      "loss": 0.01591522991657257
+    },
+    {
+      "step": 480,
+      "loss": 0.0032803418580442667
+    },
+    {
+      "step": 540,
+      "loss": 0.004877899307757616
+    },
+    {
+      "step": 600,
+      "loss": 0.0011722170747816563
+    }
+  ],
+  "evaluation": {
+    "accuracy": 1.0,
+    "accuracy_near": 1.0,
+    "accuracy_medium": 1.0,
+    "accuracy_far": 1.0,
+    "router_token_recall": 1.0,
+    "router_block_recall": 1.0
+  }
+}

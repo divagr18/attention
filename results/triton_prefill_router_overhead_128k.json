@@ -1,0 +1,12 @@
+{
+  "context": 131072,
+  "window": 256,
+  "block_size": 256,
+  "router_stride": 256,
+  "top_blocks": 4,
+  "updates_per_prefill": 512,
+  "local_prefill_mean_ms": 23.76568815000155,
+  "periodic_router_mean_ms": 0.7783165999853736,
+  "combined_mean_ms": 24.427993900030742,
+  "combined_overhead_percent": 2.786814948714822
+}

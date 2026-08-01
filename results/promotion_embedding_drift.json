@@ -1,0 +1,57 @@
+{
+  "episodes": 8,
+  "steps_per_episode": 64,
+  "query_change_interval": 8,
+  "query_change_steps": [
+    5,
+    13,
+    21,
+    29,
+    37,
+    45,
+    53
+  ],
+  "embedding_drift_threshold": 0.05,
+  "results": [
+    {
+      "strategy": "fixed_ttl_8",
+      "ttl": 8,
+      "refreshes_per_episode": 8.0,
+      "routing_fraction": 0.125,
+      "fresh_accuracy": 1.0,
+      "cached_accuracy": 0.6788330078125,
+      "accuracy_delta": -0.3211669921875,
+      "cache_matches_fresh_router": 0.671875
+    },
+    {
+      "strategy": "fixed_ttl_16",
+      "ttl": 16,
+      "refreshes_per_episode": 4.0,
+      "routing_fraction": 0.0625,
+      "fresh_accuracy": 1.0,
+      "cached_accuracy": 0.322265625,
+      "accuracy_delta": -0.677734375,
+      "cache_matches_fresh_router": 0.3125
+    },
+    {
+      "strategy": "adaptive_query_signature",
+      "ttl": null,
+      "refreshes_per_episode": 8.0,
+      "routing_fraction": 0.125,
+      "fresh_accuracy": 1.0,
+      "cached_accuracy": 1.0,
+      "accuracy_delta": 0.0,
+      "cache_matches_fresh_router": 1.0
+    },
+    {
+      "strategy": "adaptive_embedding_drift",
+      "ttl": null,
+      "refreshes_per_episode": 8.0,
+      "routing_fraction": 0.125,
+      "fresh_accuracy": 1.0,
+      "cached_accuracy": 1.0,
+      "accuracy_delta": 0.0,
+      "cache_matches_fresh_router": 1.0
+    }
+  ]
+}

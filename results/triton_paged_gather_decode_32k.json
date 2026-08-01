@@ -1,0 +1,12 @@
+{
+  "context": 32768,
+  "local_window": 256,
+  "block_size": 256,
+  "top_blocks": 4,
+  "batch_size": 8,
+  "heads": 4,
+  "head_dim": 16,
+  "dense_torch_mean_us": 594.8921166676276,
+  "fused_gather_attention_mean_us": 229.76122666364063,
+  "speedup": 2.5891754031176073
+}

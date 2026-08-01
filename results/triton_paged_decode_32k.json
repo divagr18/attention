@@ -1,0 +1,9 @@
+{
+  "context": 32768,
+  "candidates": 1280,
+  "routed_entries": 1151,
+  "dense_torch_mean_us": 596.7709399972895,
+  "paged_torch_mean_us": 590.3783466677245,
+  "paged_triton_mean_us": 494.88359666762943,
+  "triton_vs_dense_speedup": 1.2058814315441717
+}

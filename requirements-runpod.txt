@@ -1,0 +1,3 @@
+# GPU runtime used for the 4K Triton integration experiments.
+# Install torch from the CUDA 12.8 index as done in scripts/setup_runpod.sh.
+triton==3.6.0

@@ -1,0 +1,51 @@
+{
+  "config": {
+    "variant": "dense",
+    "context": 128,
+    "local_window": 32,
+    "batch_size": 8,
+    "steps": 5,
+    "eval_batches": 2,
+    "d_model": 64,
+    "layers": 2,
+    "heads": 4,
+    "learning_rate": 0.001,
+    "block_size": 32,
+    "top_blocks": 1,
+    "top_tokens": 1,
+    "router_loss_weight": 1.0,
+    "task_family": "mixed",
+    "seed": 7,
+    "device": "cuda"
+  },
+  "parameters": 149248,
+  "elapsed_seconds": 0.27545269997790456,
+  "history": [
+    {
+      "step": 1,
+      "loss": 4.216430187225342
+    },
+    {
+      "step": 2,
+      "loss": 4.237316608428955
+    },
+    {
+      "step": 3,
+      "loss": 4.389537811279297
+    },
+    {
+      "step": 4,
+      "loss": 4.025134563446045
+    },
+    {
+      "step": 5,
+      "loss": 4.242854595184326
+    }
+  ],
+  "evaluation": {
+    "accuracy": 0.0,
+    "accuracy_near": 0.0,
+    "accuracy_medium": 0.0,
+    "accuracy_far": 0.0
+  }
+}

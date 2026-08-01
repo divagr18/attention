@@ -1,0 +1,77 @@
+{
+  "config": {
+    "variant": "learned",
+    "context": 256,
+    "local_window": 32,
+    "batch_size": 32,
+    "steps": 2500,
+    "eval_batches": 64,
+    "d_model": 64,
+    "layers": 2,
+    "heads": 4,
+    "learning_rate": 0.001,
+    "block_size": 32,
+    "top_blocks": 1,
+    "top_tokens": 1,
+    "router_loss_weight": 1.0,
+    "task_family": "mixed",
+    "seed": 7,
+    "device": "cuda"
+  },
+  "parameters": 157440,
+  "elapsed_seconds": 116.9154102000175,
+  "history": [
+    {
+      "step": 1,
+      "loss": 11.496260643005371
+    },
+    {
+      "step": 250,
+      "loss": 6.399453163146973
+    },
+    {
+      "step": 500,
+      "loss": 3.2315967082977295
+    },
+    {
+      "step": 750,
+      "loss": 3.154517650604248
+    },
+    {
+      "step": 1000,
+      "loss": 3.1683573722839355
+    },
+    {
+      "step": 1250,
+      "loss": 3.6444530487060547
+    },
+    {
+      "step": 1500,
+      "loss": 2.8443241119384766
+    },
+    {
+      "step": 1750,
+      "loss": 3.0422139167785645
+    },
+    {
+      "step": 2000,
+      "loss": 1.8360137939453125
+    },
+    {
+      "step": 2250,
+      "loss": 2.4850854873657227
+    },
+    {
+      "step": 2500,
+      "loss": 3.239342212677002
+    }
+  ],
+  "evaluation": {
+    "accuracy": 0.80712890625,
+    "accuracy_near": 0.8336980306345733,
+    "accuracy_medium": 0.7925257731958762,
+    "accuracy_far": 0.8061349693251534,
+    "router_token_recall": 0.00146484375,
+    "router_block_recall": 0.7666015625
+  }
+}

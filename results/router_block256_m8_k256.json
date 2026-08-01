@@ -1,0 +1,242 @@
+{
+  "config": {
+    "cases": 1000,
+    "context_tokens": 8192,
+    "block_size": 256,
+    "top_blocks": 8,
+    "top_tokens": 256,
+    "seed": 7
+  },
+  "results": [
+    {
+      "strategy": "random",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 0.023,
+        "block_recall": 0.023,
+        "mean_scores_evaluated": 32
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 790,
+          "token_recall": 0.0189873417721519,
+          "block_recall": 0.0189873417721519
+        },
+        "distance:medium": {
+          "cases": 205,
+          "token_recall": 0.03902439024390244,
+          "block_recall": 0.03902439024390244
+        },
+        "distance:near": {
+          "cases": 5,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:composition": {
+          "cases": 250,
+          "token_recall": 0.028,
+          "block_recall": 0.028
+        },
+        "family:distractor": {
+          "cases": 239,
+          "token_recall": 0.02092050209205021,
+          "block_recall": 0.02092050209205021
+        },
+        "family:overwrite": {
+          "cases": 255,
+          "token_recall": 0.03137254901960784,
+          "block_recall": 0.03137254901960784
+        },
+        "family:passkey": {
+          "cases": 256,
+          "token_recall": 0.01171875,
+          "block_recall": 0.01171875
+        }
+      }
+    },
+    {
+      "strategy": "recency",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 0.0,
+        "block_recall": 0.0,
+        "mean_scores_evaluated": 32
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 790,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "distance:medium": {
+          "cases": 205,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "distance:near": {
+          "cases": 5,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:composition": {
+          "cases": 250,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:distractor": {
+          "cases": 239,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:overwrite": {
+          "cases": 255,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:passkey": {
+          "cases": 256,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        }
+      }
+    },
+    {
+      "strategy": "flat",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 0.3711333333333333,
+        "block_recall": 1.0,
+        "mean_scores_evaluated": 8192
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 790,
+          "token_recall": 0.3725738396624472,
+          "block_recall": 1.0
+        },
+        "distance:medium": {
+          "cases": 205,
+          "token_recall": 0.3665040650406504,
+          "block_recall": 1.0
+        },
+        "distance:near": {
+          "cases": 5,
+          "token_recall": 0.3333333333333333,
+          "block_recall": 1.0
+        },
+        "family:composition": {
+          "cases": 250,
+          "token_recall": 0.4192,
+          "block_recall": 1.0
+        },
+        "family:distractor": {
+          "cases": 239,
+          "token_recall": 0.3514644351464435,
+          "block_recall": 1.0
+        },
+        "family:overwrite": {
+          "cases": 255,
+          "token_recall": 0.3503267973856209,
+          "block_recall": 1.0
+        },
+        "family:passkey": {
+          "cases": 256,
+          "token_recall": 0.36328125,
+          "block_recall": 1.0
+        }
+      }
+    },
+    {
+      "strategy": "hierarchical",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 0.42933333333333334,
+        "block_recall": 1.0,
+        "mean_scores_evaluated": 2080
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 790,
+          "token_recall": 0.42616033755274263,
+          "block_recall": 1.0
+        },
+        "distance:medium": {
+          "cases": 205,
+          "token_recall": 0.440650406504065,
+          "block_recall": 1.0
+        },
+        "distance:near": {
+          "cases": 5,
+          "token_recall": 0.4666666666666666,
+          "block_recall": 1.0
+        },
+        "family:composition": {
+          "cases": 250,
+          "token_recall": 0.47600000000000003,
+          "block_recall": 1.0
+        },
+        "family:distractor": {
+          "cases": 239,
+          "token_recall": 0.42538354253835425,
+          "block_recall": 1.0
+        },
+        "family:overwrite": {
+          "cases": 255,
+          "token_recall": 0.4117647058823529,
+          "block_recall": 1.0
+        },
+        "family:passkey": {
+          "cases": 256,
+          "token_recall": 0.40494791666666663,
+          "block_recall": 1.0
+        }
+      }
+    },
+    {
+      "strategy": "oracle",
+      "overall": {
+        "cases": 1000,
+        "token_recall": 1.0,
+        "block_recall": 1.0,
+        "mean_scores_evaluated": 0
+      },
+      "slices": {
+        "distance:far": {
+          "cases": 790,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "distance:medium": {
+          "cases": 205,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "distance:near": {
+          "cases": 5,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "family:composition": {
+          "cases": 250,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "family:distractor": {
+          "cases": 239,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "family:overwrite": {
+          "cases": 255,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        },
+        "family:passkey": {
+          "cases": 256,
+          "token_recall": 1.0,
+          "block_recall": 1.0
+        }
+      }
+    }
+  ]
+}

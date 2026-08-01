@@ -1,0 +1,11 @@
+{
+  "context": 131072,
+  "local_window": 256,
+  "block_size": 256,
+  "top_blocks": 4,
+  "router_only_mean_us": 144.41503333425013,
+  "reroute_each_query_mean_us": 234.5384366799408,
+  "promoted_cache_mean_us": 93.28787666466572,
+  "promotion_speedup": 2.5141362957913262,
+  "per_query_router_share_percent": 61.57414340205732
+}
