@@ -277,6 +277,8 @@ def evaluate(model: TinyRetrievalTransformer, config: Config, device: torch.devi
     total = 0
     router_token_hits = 0
     router_block_hits = 0
+    router_all_token_hits = 0
+    router_all_block_hits = 0
     by_bucket: dict[str, list[int]] = {"near": [0, 0], "medium": [0, 0], "far": [0, 0]}
     for _ in range(config.eval_batches):
         tokens, targets, evidence_positions = make_batch(config, device, generator)
@@ -288,11 +290,15 @@ def evaluate(model: TinyRetrievalTransformer, config: Config, device: torch.devi
                 router_token_hits += int(routing.retrieved_indices.eq(evidence_positions.unsqueeze(1)).any(dim=1).sum())
                 retrieved_blocks = routing.retrieved_indices // config.block_size
                 router_block_hits += int(retrieved_blocks.eq((evidence_positions // config.block_size).unsqueeze(1)).any(dim=1).sum())
+                router_all_token_hits += int(routing.retrieved_indices.eq(evidence_positions.unsqueeze(1)).any(dim=1).sum())
+                router_all_block_hits += int(retrieved_blocks.eq((evidence_positions // config.block_size).unsqueeze(1)).any(dim=1).sum())
             else:
                 token_matches = routing.retrieved_indices.unsqueeze(2).eq(evidence_positions.unsqueeze(1))
                 router_token_hits += int(token_matches.any(dim=(1, 2)).sum())
                 block_matches = (routing.retrieved_indices // config.block_size).unsqueeze(2).eq((evidence_positions // config.block_size).unsqueeze(1))
                 router_block_hits += int(block_matches.any(dim=(1, 2)).sum())
+                router_all_token_hits += int(token_matches.any(dim=1).all(dim=1).sum())
+                router_all_block_hits += int(block_matches.any(dim=1).all(dim=1).sum())
         distances = config.context - (evidence_positions if evidence_positions.ndim == 1 else evidence_positions.min(dim=1).values)
         for name, mask in (("near", distances < config.context // 3), ("medium", (distances >= config.context // 3) & (distances < 2 * config.context // 3)), ("far", distances >= 2 * config.context // 3)):
             by_bucket[name][0] += int(matches[mask].sum())
@@ -304,6 +310,8 @@ def evaluate(model: TinyRetrievalTransformer, config: Config, device: torch.devi
     if config.variant == "learned":
         metrics["router_token_recall"] = router_token_hits / total
         metrics["router_block_recall"] = router_block_hits / total
+        metrics["router_all_token_recall"] = router_all_token_hits / total
+        metrics["router_all_block_recall"] = router_all_block_hits / total
     return metrics
 
 
