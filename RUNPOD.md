@@ -23,6 +23,10 @@ token.
    bash scripts/runpod_8k_curriculum.sh 2>&1 | tee results/runpod_8k.log
    ```
 
+   If a run is already active without `tmux`, do not interrupt it. `tee` is
+   still writing its output to `results/runpod_8k.log`; install `tmux` through
+   the setup script before the next run.
+
 5. Copy `results/*.json` and the final checkpoint back to persistent storage
    before stopping the pod. Stop the pod when idle; do not terminate it until
    artifacts are confirmed on the volume.
