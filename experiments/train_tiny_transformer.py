@@ -369,7 +369,10 @@ def main() -> None:
                 mode="linear",
                 align_corners=True,
             ).squeeze(0).T
-        model.load_state_dict(initial_state)
+        incompatible = model.load_state_dict(initial_state, strict=False)
+        unexpected = [key for key in incompatible.unexpected_keys if not key.startswith("blocks.")]
+        if unexpected:
+            raise RuntimeError(f"unexpected initialization keys: {unexpected}")
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     teacher = None
     if args.teacher_checkpoint is not None:
