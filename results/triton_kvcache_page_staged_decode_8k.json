@@ -1,0 +1,12 @@
+{
+  "context": 8192,
+  "prefill_kv_cache_ms": 0.13902555219829082,
+  "steps_per_episode": 16,
+  "exact_router_model_accuracy": 1.0,
+  "triton_full_page_model_accuracy": 1.0,
+  "triton_page_decode_ms": 0.5578140990110114,
+  "full_pytorch_reroute_ms": 14.868715792545117,
+  "triton_adaptive_page_decode_ms": 0.5217600264586508,
+  "reroute_calls_per_episode": 16.0,
+  "adaptive_router_calls_per_episode": 4.0
+}
