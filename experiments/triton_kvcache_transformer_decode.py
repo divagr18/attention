@@ -158,6 +158,9 @@ def main() -> None:
             total += 1
     report = {
         "context": config.context,
+        "retrieval_unit": config.retrieval_unit,
+        "top_tokens": config.top_tokens,
+        "retrieval_width": config.retrieval_width,
         "prefill_kv_cache_ms": prefill_ms,
         "steps_per_episode": args.steps,
         "exact_router_model_accuracy": exact_correct / total,
