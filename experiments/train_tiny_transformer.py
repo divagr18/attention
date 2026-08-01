@@ -78,7 +78,7 @@ def make_batch(config: Config, device: torch.device, generator: torch.Generator)
     historical_length = config.context - config.local_window
     # Keep every evidence span outside the local window of the final query.
     positions = torch.randint(0, historical_length - 3, (config.batch_size,), generator=generator, device=device)
-    if config.task_family == "dual":
+    if config.task_family in ("dual", "dual_parity"):
         evidence = torch.empty(config.batch_size, 2, dtype=torch.long, device=device)
         for row in range(config.batch_size):
             page = int(torch.randint(0, historical_length // config.block_size, (1,), generator=generator, device=device))
@@ -88,7 +88,8 @@ def make_batch(config: Config, device: torch.device, generator: torch.Generator)
             tokens[row, first:first + 3] = torch.tensor([pair_keys[0], SEPARATOR_TOKEN, pair_values[0]], device=device)
             tokens[row, second:second + 3] = torch.tensor([pair_keys[1], SEPARATOR_TOKEN, pair_values[1]], device=device)
             tokens[row, -5:] = torch.tensor([QUERY_TOKEN, SEPARATOR_TOKEN, pair_keys[0], SEPARATOR_TOKEN, pair_keys[1]], device=device)
-            values[row] = VALUE_START + ((pair_values[0] - VALUE_START + pair_values[1] - VALUE_START) % KEY_COUNT)
+            combined = pair_values[0] - VALUE_START + pair_values[1] - VALUE_START
+            values[row] = VALUE_START + (combined % 2 if config.task_family == "dual_parity" else combined % KEY_COUNT)
             evidence[row] = torch.tensor([first, second], device=device)
         return tokens, values, evidence
     for row in range(config.batch_size):
@@ -333,7 +334,7 @@ def main() -> None:
     parser.add_argument("--router-loss-weight", type=float, default=1.0)
     parser.add_argument("--retrieval-unit", choices=("span", "page", "page_fine"), default="span")
     parser.add_argument("--retrieval-width", type=int, default=3, help="Promoted token count for span retrieval.")
-    parser.add_argument("--task-family", choices=("single", "overwrite", "distractor", "mixed", "multirecord", "dual"), default="single")
+    parser.add_argument("--task-family", choices=("single", "overwrite", "distractor", "mixed", "multirecord", "dual", "dual_parity"), default="single")
     parser.add_argument("--query-width", type=int, default=3)
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--init-checkpoint", type=Path, help="Initialize model weights before training (for retrieval-unit curricula).")
