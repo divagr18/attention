@@ -59,6 +59,7 @@ class Config:
     device: str
     retrieval_unit: str = "span"
     retrieval_width: int = 3
+    query_width: int = 3
 
 
 def make_batch(config: Config, device: torch.device, generator: torch.Generator) -> tuple[Tensor, Tensor, Tensor]:
@@ -77,6 +78,19 @@ def make_batch(config: Config, device: torch.device, generator: torch.Generator)
     historical_length = config.context - config.local_window
     # Keep every evidence span outside the local window of the final query.
     positions = torch.randint(0, historical_length - 3, (config.batch_size,), generator=generator, device=device)
+    if config.task_family == "dual":
+        evidence = torch.empty(config.batch_size, 2, dtype=torch.long, device=device)
+        for row in range(config.batch_size):
+            page = int(torch.randint(0, historical_length // config.block_size, (1,), generator=generator, device=device))
+            first, second = page * config.block_size + 4, page * config.block_size + 16
+            pair_keys = torch.randperm(KEY_COUNT, generator=generator, device=device)[:2] + KEY_START
+            pair_values = torch.randint(VALUE_START, VALUE_START + KEY_COUNT, (2,), generator=generator, device=device)
+            tokens[row, first:first + 3] = torch.tensor([pair_keys[0], SEPARATOR_TOKEN, pair_values[0]], device=device)
+            tokens[row, second:second + 3] = torch.tensor([pair_keys[1], SEPARATOR_TOKEN, pair_values[1]], device=device)
+            tokens[row, -5:] = torch.tensor([QUERY_TOKEN, SEPARATOR_TOKEN, pair_keys[0], SEPARATOR_TOKEN, pair_keys[1]], device=device)
+            values[row] = VALUE_START + ((pair_values[0] - VALUE_START + pair_values[1] - VALUE_START) % KEY_COUNT)
+            evidence[row] = torch.tensor([first, second], device=device)
+        return tokens, values, evidence
     for row in range(config.batch_size):
         position = int(positions[row])
         key = int(keys[row])
@@ -181,10 +195,11 @@ class RouterOutput:
 class HierarchicalRouter(nn.Module):
     """Coarse block scoring followed by fine token scoring within top blocks."""
 
-    def __init__(self, d_model: int) -> None:
+    def __init__(self, d_model: int, query_width: int = 3) -> None:
         super().__init__()
         self.query = nn.Linear(d_model, d_model, bias=False)
         self.key = nn.Linear(d_model, d_model, bias=False)
+        self.query_width = query_width
 
     def forward(self, embeddings: Tensor, *, historical_length: int, block_size: int, top_blocks: int, top_tokens: int, retrieval_unit: str = "span", retrieval_width: int = 3) -> RouterOutput:
         if historical_length % block_size:
@@ -192,7 +207,7 @@ class HierarchicalRouter(nn.Module):
         # Score record starts: include each key's following structural marker.
         record_embeddings = embeddings[:, :historical_length].clone()
         record_embeddings[:, :-1] = record_embeddings[:, :-1] + embeddings[:, 1:historical_length]
-        query = self.query(embeddings[:, -3:].mean(dim=1))
+        query = self.query(embeddings[:, -self.query_width:].mean(dim=1))
         keys = self.key(record_embeddings)
         token_scores = torch.einsum("bd,btd->bt", query, keys) / math.sqrt(query.size(-1))
         block_scores = token_scores.view(token_scores.size(0), historical_length // block_size, block_size).amax(dim=-1)
@@ -226,7 +241,7 @@ class TinyRetrievalTransformer(nn.Module):
         self.token_embedding = nn.Embedding(VOCAB_SIZE, config.d_model)
         self.position_embedding = nn.Embedding(config.context, config.d_model)
         self.blocks = nn.ModuleList(Block(config.d_model, config.heads) for _ in range(config.layers))
-        self.router = HierarchicalRouter(config.d_model)
+        self.router = HierarchicalRouter(config.d_model, config.query_width)
         self.norm = nn.LayerNorm(config.d_model)
         self.output = nn.Linear(config.d_model, VOCAB_SIZE, bias=False)
         self.context = config.context
@@ -269,10 +284,16 @@ def evaluate(model: TinyRetrievalTransformer, config: Config, device: torch.devi
         predictions = logits[:, -1, VALUE_START : VALUE_START + KEY_COUNT].argmax(dim=-1) + VALUE_START
         matches = predictions.eq(targets)
         if routing is not None:
-            router_token_hits += int(routing.retrieved_indices.eq(evidence_positions.unsqueeze(1)).any(dim=1).sum())
-            retrieved_blocks = routing.retrieved_indices // config.block_size
-            router_block_hits += int(retrieved_blocks.eq((evidence_positions // config.block_size).unsqueeze(1)).any(dim=1).sum())
-        distances = config.context - evidence_positions
+            if evidence_positions.ndim == 1:
+                router_token_hits += int(routing.retrieved_indices.eq(evidence_positions.unsqueeze(1)).any(dim=1).sum())
+                retrieved_blocks = routing.retrieved_indices // config.block_size
+                router_block_hits += int(retrieved_blocks.eq((evidence_positions // config.block_size).unsqueeze(1)).any(dim=1).sum())
+            else:
+                token_matches = routing.retrieved_indices.unsqueeze(2).eq(evidence_positions.unsqueeze(1))
+                router_token_hits += int(token_matches.any(dim=(1, 2)).sum())
+                block_matches = (routing.retrieved_indices // config.block_size).unsqueeze(2).eq((evidence_positions // config.block_size).unsqueeze(1))
+                router_block_hits += int(block_matches.any(dim=(1, 2)).sum())
+        distances = config.context - (evidence_positions if evidence_positions.ndim == 1 else evidence_positions.min(dim=1).values)
         for name, mask in (("near", distances < config.context // 3), ("medium", (distances >= config.context // 3) & (distances < 2 * config.context // 3)), ("far", distances >= 2 * config.context // 3)):
             by_bucket[name][0] += int(matches[mask].sum())
             by_bucket[name][1] += int(mask.sum())
@@ -304,7 +325,8 @@ def main() -> None:
     parser.add_argument("--router-loss-weight", type=float, default=1.0)
     parser.add_argument("--retrieval-unit", choices=("span", "page", "page_fine"), default="span")
     parser.add_argument("--retrieval-width", type=int, default=3, help="Promoted token count for span retrieval.")
-    parser.add_argument("--task-family", choices=("single", "overwrite", "distractor", "mixed", "multirecord"), default="single")
+    parser.add_argument("--task-family", choices=("single", "overwrite", "distractor", "mixed", "multirecord", "dual"), default="single")
+    parser.add_argument("--query-width", type=int, default=3)
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--init-checkpoint", type=Path, help="Initialize model weights before training (for retrieval-unit curricula).")
     parser.add_argument("--teacher-checkpoint", type=Path)
@@ -357,7 +379,10 @@ def main() -> None:
         if routing is not None:
             if teacher is None:
                 block_targets = evidence_positions // config.block_size
-                router_loss = F.cross_entropy(routing.block_scores, block_targets) + F.cross_entropy(routing.token_scores, evidence_positions)
+                if evidence_positions.ndim == 1:
+                    router_loss = F.cross_entropy(routing.block_scores, block_targets) + F.cross_entropy(routing.token_scores, evidence_positions)
+                else:
+                    router_loss = sum(F.cross_entropy(routing.block_scores, block_targets[:, index]) + F.cross_entropy(routing.token_scores, evidence_positions[:, index]) for index in range(evidence_positions.size(1)))
                 loss = loss + config.router_loss_weight * router_loss
             else:
                 with torch.no_grad():
