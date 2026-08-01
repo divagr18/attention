@@ -40,3 +40,7 @@ token.
 The 8K launcher preserves the validated 4K training code and only changes the
 context length. It deliberately trains page attention by progressive widening,
 because direct full-page training failed at 4K.
+
+For a fair 16K curriculum control, `scripts/runpod_16k_direct_page_control.sh`
+starts from the same 3-token span checkpoint as the staged curriculum and
+uses the identical 4,800 training updates under full-page exposure.
