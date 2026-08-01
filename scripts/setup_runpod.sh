@@ -9,6 +9,12 @@ CACHE_PATH="${CACHE_PATH:-.cache/runpod}"
 command -v nvidia-smi >/dev/null
 nvidia-smi
 
+if ! command -v tmux >/dev/null; then
+  apt-get update
+  apt-get install -y --no-install-recommends tmux
+  rm -rf /var/lib/apt/lists/*
+fi
+
 "${PYTHON_BIN}" -m venv "${VENV_PATH}"
 "${VENV_PATH}/bin/python" -m pip install --upgrade pip
 "${VENV_PATH}/bin/python" -m pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.11.0
