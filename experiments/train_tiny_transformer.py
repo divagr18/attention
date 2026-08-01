@@ -24,6 +24,7 @@ from pathlib import Path
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 KEY_COUNT = 64
@@ -60,6 +61,7 @@ class Config:
     retrieval_unit: str = "span"
     retrieval_width: int = 3
     query_width: int = 3
+    gradient_checkpointing: bool = False
 
 
 def make_batch(config: Config, device: torch.device, generator: torch.Generator) -> tuple[Tensor, Tensor, Tensor]:
@@ -248,6 +250,7 @@ class TinyRetrievalTransformer(nn.Module):
         self.context = config.context
         self.retrieval_unit = config.retrieval_unit
         self.retrieval_width = config.retrieval_width
+        self.gradient_checkpointing = config.gradient_checkpointing
 
     def forward(self, tokens: Tensor, *, variant: str, local_window: int, evidence_positions: Tensor | None, block_size: int | None = None, top_blocks: int | None = None, top_tokens: int | None = None, capture_attention: bool = False, retrieved_indices_override: Tensor | None = None) -> tuple[Tensor, RouterOutput | None, Tensor | None]:
         positions = torch.arange(tokens.size(1), device=tokens.device)
@@ -265,7 +268,11 @@ class TinyRetrievalTransformer(nn.Module):
         x = token_embeddings + self.position_embedding(positions)
         captured_attention = None
         for index, block in enumerate(self.blocks):
-            x, attention = block(x, variant=variant, local_window=local_window, evidence_positions=evidence_positions, retrieved_indices=retrieved_indices, capture_attention=capture_attention and index == len(self.blocks) - 1)
+            if self.training and self.gradient_checkpointing and not capture_attention:
+                x = checkpoint(lambda state, current_block=block: current_block(state, variant=variant, local_window=local_window, evidence_positions=evidence_positions, retrieved_indices=retrieved_indices)[0], x, use_reentrant=False)
+                attention = None
+            else:
+                x, attention = block(x, variant=variant, local_window=local_window, evidence_positions=evidence_positions, retrieved_indices=retrieved_indices, capture_attention=capture_attention and index == len(self.blocks) - 1)
             if attention is not None:
                 captured_attention = attention
         return self.output(self.norm(x)), routing, captured_attention
@@ -336,6 +343,7 @@ def main() -> None:
     parser.add_argument("--retrieval-width", type=int, default=3, help="Promoted token count for span retrieval.")
     parser.add_argument("--task-family", choices=("single", "overwrite", "distractor", "mixed", "multirecord", "dual", "dual_parity"), default="single")
     parser.add_argument("--query-width", type=int, default=3)
+    parser.add_argument("--gradient-checkpointing", action="store_true")
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--init-checkpoint", type=Path, help="Initialize model weights before training (for retrieval-unit curricula).")
     parser.add_argument("--teacher-checkpoint", type=Path)
