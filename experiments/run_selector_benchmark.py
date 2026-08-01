@@ -95,21 +95,22 @@ def top_indices(scores: list[int], count: int, rng: random.Random | None = None)
     return sorted(order, key=lambda index: scores[index], reverse=True)[:count]
 
 
-def select(case: Case, *, strategy: str, block_size: int, top_blocks: int, top_tokens: int, rng: random.Random) -> tuple[set[int], int]:
+def select(case: Case, *, strategy: str, block_size: int, top_blocks: int, top_tokens: int, rng: random.Random) -> tuple[set[int], int, set[int]]:
     all_blocks = list(blocks(len(case.tokens), block_size))
     if strategy == "oracle":
-        return set(case.evidence_indices), 0
+        return set(case.evidence_indices), 0, {case.evidence_block}
     if strategy == "random":
         selected_blocks = rng.sample(range(len(all_blocks)), min(top_blocks, len(all_blocks)))
         candidates = [index for block in selected_blocks for index in all_blocks[block]]
-        return set(candidates[:top_tokens]), len(all_blocks)
+        return set(candidates[:top_tokens]), len(all_blocks), set(selected_blocks)
     if strategy == "recency":
         selected_blocks = list(range(max(0, len(all_blocks) - top_blocks), len(all_blocks)))
         candidates = [index for block in selected_blocks for index in all_blocks[block]]
-        return set(candidates[-top_tokens:]), len(all_blocks)
+        return set(candidates[-top_tokens:]), len(all_blocks), set(selected_blocks)
     if strategy == "flat":
         scores = [lexical_score(case.query_terms, (token,)) for token in case.tokens]
-        return set(top_indices(scores, top_tokens, rng)), len(case.tokens)
+        selected = set(top_indices(scores, top_tokens, rng))
+        return selected, len(case.tokens), {index // block_size for index in selected}
     if strategy != "hierarchical":
         raise ValueError(f"unknown strategy: {strategy}")
     block_scores = [lexical_score(case.query_terms, (case.tokens[index] for index in block)) for block in all_blocks]
@@ -117,20 +118,20 @@ def select(case: Case, *, strategy: str, block_size: int, top_blocks: int, top_t
     candidates = [index for block in selected_blocks for index in all_blocks[block]]
     token_scores = [lexical_score(case.query_terms, (case.tokens[index],)) for index in candidates]
     selected = [candidates[index] for index in top_indices(token_scores, top_tokens, rng)]
-    return set(selected), len(all_blocks) + len(candidates)
+    return set(selected), len(all_blocks) + len(candidates), set(selected_blocks)
 
 
 def evaluate(cases: list[Case], *, strategy: str, block_size: int, top_blocks: int, top_tokens: int, seed: int) -> dict[str, object]:
     rng = random.Random(seed)
     rows: list[dict[str, object]] = []
     for case in cases:
-        selected, score_count = select(case, strategy=strategy, block_size=block_size, top_blocks=top_blocks, top_tokens=top_tokens, rng=rng)
+        selected, score_count, selected_blocks = select(case, strategy=strategy, block_size=block_size, top_blocks=top_blocks, top_tokens=top_tokens, rng=rng)
         evidence = set(case.evidence_indices)
         rows.append({
             "family": case.family,
             "distance_bucket": distance_bucket(case.distance),
             "token_recall": len(selected & evidence) / len(evidence),
-            "block_recall": float(any(index // block_size == case.evidence_block for index in selected)),
+            "block_recall": float(case.evidence_block in selected_blocks),
             "scores_evaluated": score_count,
         })
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)

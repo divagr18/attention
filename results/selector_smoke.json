@@ -1,6 +1,6 @@
 {
   "config": {
-    "cases": 200,
+    "cases": 8,
     "context_tokens": 8192,
     "block_size": 256,
     "top_blocks": 4,
@@ -11,80 +11,80 @@
     {
       "strategy": "random",
       "overall": {
-        "cases": 200,
-        "token_recall": 0.005,
-        "block_recall": 0.03,
+        "cases": 8,
+        "token_recall": 0.0,
+        "block_recall": 0.25,
         "mean_scores_evaluated": 32
       },
       "slices": {
         "distance:far": {
-          "cases": 151,
+          "cases": 6,
           "token_recall": 0.0,
-          "block_recall": 0.019867549668874173
+          "block_recall": 0.16666666666666666
         },
         "distance:medium": {
-          "cases": 49,
-          "token_recall": 0.02040816326530612,
-          "block_recall": 0.061224489795918366
+          "cases": 2,
+          "token_recall": 0.0,
+          "block_recall": 0.5
         },
         "family:composition": {
-          "cases": 49,
-          "token_recall": 0.0,
-          "block_recall": 0.061224489795918366
-        },
-        "family:distractor": {
-          "cases": 50,
-          "token_recall": 0.02,
-          "block_recall": 0.04
-        },
-        "family:overwrite": {
-          "cases": 50,
-          "token_recall": 0.0,
-          "block_recall": 0.02
-        },
-        "family:passkey": {
-          "cases": 51,
+          "cases": 2,
           "token_recall": 0.0,
           "block_recall": 0.0
+        },
+        "family:distractor": {
+          "cases": 2,
+          "token_recall": 0.0,
+          "block_recall": 0.0
+        },
+        "family:overwrite": {
+          "cases": 3,
+          "token_recall": 0.0,
+          "block_recall": 0.3333333333333333
+        },
+        "family:passkey": {
+          "cases": 1,
+          "token_recall": 0.0,
+          "block_recall": 1.0
         }
       }
     },
     {
       "strategy": "recency",
       "overall": {
-        "cases": 200,
+        "cases": 8,
         "token_recall": 0.0,
         "block_recall": 0.0,
         "mean_scores_evaluated": 32
       },
       "slices": {
         "distance:far": {
-          "cases": 151,
+          "cases": 6,
           "token_recall": 0.0,
           "block_recall": 0.0
         },
         "distance:medium": {
-          "cases": 49,
+          "cases": 2,
           "token_recall": 0.0,
           "block_recall": 0.0
         },
         "family:composition": {
-          "cases": 49,
+          "cases": 2,
           "token_recall": 0.0,
           "block_recall": 0.0
         },
         "family:distractor": {
-          "cases": 50,
+          "cases": 2,
           "token_recall": 0.0,
           "block_recall": 0.0
         },
         "family:overwrite": {
-          "cases": 50,
+          "cases": 3,
           "token_recall": 0.0,
           "block_recall": 0.0
         },
         "family:passkey": {
-          "cases": 51,
+          "cases": 1,
           "token_recall": 0.0,
           "block_recall": 0.0
         }
@@ -93,40 +93,40 @@
     {
       "strategy": "flat",
       "overall": {
-        "cases": 200,
-        "token_recall": 0.36,
+        "cases": 8,
+        "token_recall": 0.35,
         "block_recall": 1.0,
         "mean_scores_evaluated": 8192
       },
       "slices": {
         "distance:far": {
-          "cases": 151,
-          "token_recall": 0.3620309050772627,
+          "cases": 6,
+          "token_recall": 0.35555555555555557,
           "block_recall": 1.0
         },
         "distance:medium": {
-          "cases": 49,
-          "token_recall": 0.35374149659863946,
+          "cases": 2,
+          "token_recall": 0.3333333333333333,
           "block_recall": 1.0
         },
         "family:composition": {
-          "cases": 49,
-          "token_recall": 0.40816326530612246,
+          "cases": 2,
+          "token_recall": 0.4,
           "block_recall": 1.0
         },
         "family:distractor": {
-          "cases": 50,
-          "token_recall": 0.3466666666666666,
+          "cases": 2,
+          "token_recall": 0.3333333333333333,
           "block_recall": 1.0
         },
         "family:overwrite": {
-          "cases": 50,
-          "token_recall": 0.33999999999999997,
+          "cases": 3,
+          "token_recall": 0.3333333333333333,
           "block_recall": 1.0
         },
         "family:passkey": {
-          "cases": 51,
-          "token_recall": 0.3464052287581699,
+          "cases": 1,
+          "token_recall": 0.3333333333333333,
           "block_recall": 1.0
         }
       }
@@ -134,40 +134,40 @@
     {
       "strategy": "hierarchical",
       "overall": {
-        "cases": 200,
-        "token_recall": 0.42033333333333334,
+        "cases": 8,
+        "token_recall": 0.39166666666666666,
         "block_recall": 1.0,
         "mean_scores_evaluated": 1056
       },
       "slices": {
         "distance:far": {
-          "cases": 151,
-          "token_recall": 0.4269315673289183,
+          "cases": 6,
+          "token_recall": 0.4111111111111111,
           "block_recall": 1.0
         },
         "distance:medium": {
-          "cases": 49,
-          "token_recall": 0.39999999999999997,
+          "cases": 2,
+          "token_recall": 0.3333333333333333,
           "block_recall": 1.0
         },
         "family:composition": {
-          "cases": 49,
-          "token_recall": 0.4775510204081633,
+          "cases": 2,
+          "token_recall": 0.4,
           "block_recall": 1.0
         },
         "family:distractor": {
-          "cases": 50,
-          "token_recall": 0.44,
+          "cases": 2,
+          "token_recall": 0.5,
           "block_recall": 1.0
         },
         "family:overwrite": {
-          "cases": 50,
-          "token_recall": 0.38,
+          "cases": 3,
+          "token_recall": 0.3333333333333333,
           "block_recall": 1.0
         },
         "family:passkey": {
-          "cases": 51,
-          "token_recall": 0.3856209150326797,
+          "cases": 1,
+          "token_recall": 0.3333333333333333,
           "block_recall": 1.0
         }
       }
@@ -175,43 +175,43 @@
     {
       "strategy": "oracle",
       "overall": {
-        "cases": 200,
+        "cases": 8,
         "token_recall": 1.0,
         "block_recall": 1.0,
         "mean_scores_evaluated": 0
       },
       "slices": {
         "distance:far": {
-          "cases": 151,
+          "cases": 6,
           "token_recall": 1.0,
           "block_recall": 1.0
         },
         "distance:medium": {
-          "cases": 49,
+          "cases": 2,
           "token_recall": 1.0,
           "block_recall": 1.0
         },
         "family:composition": {
-          "cases": 49,
+          "cases": 2,
           "token_recall": 1.0,
           "block_recall": 1.0
         },
         "family:distractor": {
-          "cases": 50,
+          "cases": 2,
           "token_recall": 1.0,
           "block_recall": 1.0
         },
         "family:overwrite": {
-          "cases": 50,
+          "cases": 3,
           "token_recall": 1.0,
           "block_recall": 1.0
         },
         "family:passkey": {
-          "cases": 51,
+          "cases": 1,
           "token_recall": 1.0,
           "block_recall": 1.0
         }
       }
     }
   ]
-}\n
+}

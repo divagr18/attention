@@ -23,7 +23,15 @@ def periodic_router(query: torch.Tensor, keys: torch.Tensor, *, block_size: int,
     block_end_positions = torch.arange(block_size - 1, context, block_size, device=query.device)
     causal = block_end_positions.unsqueeze(0) <= update_positions.unsqueeze(1)
     scores = scores.masked_fill(~causal.unsqueeze(0).unsqueeze(0), float("-inf"))
-    return scores.topk(top_blocks, dim=-1).indices
+    # Early updates have fewer causal blocks than the requested budget.  Pad
+    # unused slots with -1 instead of returning masked future block IDs.
+    selected = torch.full((*scores.shape[:-1], top_blocks), -1, dtype=torch.long, device=query.device)
+    for update in range(update_positions.numel()):
+        available = int(causal[update].sum())
+        count = min(top_blocks, available)
+        if count:
+            selected[:, :, update, :count] = scores[:, :, update].topk(count, dim=-1).indices
+    return selected
 
 
 def timed(operation, iterations: int) -> float:

@@ -81,6 +81,8 @@ def make_batch(config: Config, device: torch.device, generator: torch.Generator)
     # Keep every evidence span outside the local window of the final query.
     positions = torch.randint(0, historical_length - 3, (config.batch_size,), generator=generator, device=device)
     if config.task_family in ("dual", "dual_parity"):
+        if config.block_size < 20:
+            raise ValueError("dual-record tasks require block_size >= 20 for safe in-page record offsets")
         evidence = torch.empty(config.batch_size, 2, dtype=torch.long, device=device)
         for row in range(config.batch_size):
             page = int(torch.randint(0, historical_length // config.block_size, (1,), generator=generator, device=device))
