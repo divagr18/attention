@@ -19,7 +19,7 @@ import torch
 
 from evaluate_promotion_ttl import build_context, query_tokens
 from train_tiny_transformer import Config, TinyRetrievalTransformer, VALUE_START
-from triton_paged_attention import paged_gather_decode_attention
+from triton_paged_attention import paged_gather_decode_attention, span_gather_decode_attention
 
 
 def load_model(path: Path) -> tuple[TinyRetrievalTransformer, Config]:
@@ -66,6 +66,24 @@ def page_decode(model: TinyRetrievalTransformer, config: Config, tokens: torch.T
     return logits[:, VALUE_START : VALUE_START + 64].argmax(dim=-1) + VALUE_START
 
 
+@torch.no_grad()
+def fine_decode(model: TinyRetrievalTransformer, config: Config, tokens: torch.Tensor, key_cache: torch.Tensor, value_cache: torch.Tensor, centers: torch.Tensor) -> torch.Tensor:
+    tail_q, tail_k, tail_v, tail_x = qkv(model, tokens[:, -3:], config.context - 3)
+    key_cache = key_cache.clone()
+    value_cache = value_cache.clone()
+    key_cache[:, :, -3:] = tail_k
+    value_cache[:, :, -3:] = tail_v
+    attended = span_gather_decode_attention(
+        tail_q[:, :, -1].contiguous(), key_cache.contiguous(), value_cache.contiguous(), centers.contiguous(),
+        local_window=config.local_window, span_width=config.retrieval_width,
+    )
+    attention = model.blocks[0].attention.output(attended.reshape(tokens.size(0), -1))
+    x = tail_x[:, -1] + attention
+    x = x + model.blocks[0].mlp(model.blocks[0].norm2(x))
+    logits = model.output(model.norm(x))
+    return logits[:, VALUE_START : VALUE_START + 64].argmax(dim=-1) + VALUE_START
+
+
 def elapsed(operation, iterations: int) -> float:
     for _ in range(10):
         operation()
@@ -99,8 +117,12 @@ def main() -> None:
     warm_tokens, _ = query_tokens(base, keys, values, slots[0])
     _, warm_routing, _ = model(warm_tokens, variant="learned", local_window=config.local_window, evidence_positions=None, block_size=config.block_size, top_blocks=config.top_blocks, top_tokens=config.top_tokens)
     warm_blocks = warm_routing.block_scores.topk(config.top_blocks, dim=-1).indices
+    warm_centers = warm_routing.retrieved_indices[:, ::config.retrieval_width]
     for _ in range(10):
-        page_decode(model, config, warm_tokens, key_cache, value_cache, warm_blocks)
+        if config.retrieval_unit == "page_fine":
+            fine_decode(model, config, warm_tokens, key_cache, value_cache, warm_centers)
+        else:
+            page_decode(model, config, warm_tokens, key_cache, value_cache, warm_blocks)
     torch.cuda.synchronize()
     exact_correct = page_correct = total = reroute_calls = adaptive_calls = 0
     page_times, reroute_times, adaptive_times = [], [], []
@@ -115,19 +137,22 @@ def main() -> None:
             exact_prediction = logits[:, -1, VALUE_START : VALUE_START + 64].argmax(dim=-1) + VALUE_START
             exact_correct += int(exact_prediction.eq(targets).sum())
             selected = routing.block_scores.topk(config.top_blocks, dim=-1).indices
+            centers = routing.retrieved_indices[:, ::config.retrieval_width]
             start = time.perf_counter()
-            page_prediction = page_decode(model, config, tokens, key_cache, value_cache, selected)
+            decode = fine_decode if config.retrieval_unit == "page_fine" else page_decode
+            candidates = centers if config.retrieval_unit == "page_fine" else selected
+            page_prediction = decode(model, config, tokens, key_cache, value_cache, candidates)
             torch.cuda.synchronize()
             page_times.append((time.perf_counter() - start) * 1000)
             page_correct += int(page_prediction.eq(targets).sum())
             reroute_calls += 1
             state = model.router.query(model.token_embedding(tokens[:, -3:]).mean(dim=1))
             if promoted is None or bool(1.0 - torch.nn.functional.cosine_similarity(state, promoted_state).mean() > 0.05):
-                promoted = selected
+                promoted = candidates
                 promoted_state = state
                 adaptive_calls += 1
             start = time.perf_counter()
-            page_decode(model, config, tokens, key_cache, value_cache, promoted)
+            decode(model, config, tokens, key_cache, value_cache, promoted)
             torch.cuda.synchronize()
             adaptive_times.append((time.perf_counter() - start) * 1000)
             total += 1
