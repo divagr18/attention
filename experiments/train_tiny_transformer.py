@@ -320,7 +320,19 @@ def main() -> None:
     model = TinyRetrievalTransformer(config).to(device)
     if args.init_checkpoint is not None:
         initialization = torch.load(args.init_checkpoint, map_location=device, weights_only=True)
-        model.load_state_dict(initialization["model_state"])
+        initial_state = initialization["model_state"]
+        position_key = "position_embedding.weight"
+        if initial_state[position_key].shape != model.state_dict()[position_key].shape:
+            # Preserve the learned positional trend when extending a context
+            # curriculum (for example 8K -> 16K), then let fine-tuning adapt.
+            source = initial_state[position_key].T.unsqueeze(0)
+            initial_state[position_key] = F.interpolate(
+                source,
+                size=config.context,
+                mode="linear",
+                align_corners=True,
+            ).squeeze(0).T
+        model.load_state_dict(initial_state)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     teacher = None
     if args.teacher_checkpoint is not None:
