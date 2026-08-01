@@ -209,6 +209,12 @@ class HierarchicalRouter(nn.Module):
             # The full selected page matches the paged Triton gather kernel.
             page_offsets = torch.arange(block_size, device=embeddings.device)
             retrieved = (selected_blocks.unsqueeze(-1) * block_size + page_offsets).flatten(start_dim=1)
+        elif retrieval_unit == "page_fine":
+            # Coarse page selection followed by short exact spans within the
+            # selected page.  This retains page-level routing while avoiding
+            # full-page attention normalization over irrelevant tokens.
+            span_offsets = torch.arange(retrieval_width, device=embeddings.device)
+            retrieved = (centers.unsqueeze(-1) + span_offsets).clamp_max(historical_length - 1).flatten(start_dim=1)
         else:
             raise ValueError(f"unknown retrieval unit: {retrieval_unit}")
         return RouterOutput(block_scores=block_scores, token_scores=token_scores, retrieved_indices=retrieved)
@@ -296,7 +302,7 @@ def main() -> None:
     parser.add_argument("--top-blocks", type=int, default=1)
     parser.add_argument("--top-tokens", type=int, default=1)
     parser.add_argument("--router-loss-weight", type=float, default=1.0)
-    parser.add_argument("--retrieval-unit", choices=("span", "page"), default="span")
+    parser.add_argument("--retrieval-unit", choices=("span", "page", "page_fine"), default="span")
     parser.add_argument("--retrieval-width", type=int, default=3, help="Promoted token count for span retrieval.")
     parser.add_argument("--task-family", choices=("single", "overwrite", "distractor", "mixed", "multirecord"), default="single")
     parser.add_argument("--checkpoint", type=Path)
