@@ -954,4 +954,38 @@ absolute error of 1.19e-7 for sliding, oracle, and learned retrieval. On the
 The quality result is unchanged while removing the quadratic local-attention
 workspace from the learned path. Triton remains about 8.4× faster than the
 now-fair windowed PyTorch routed control, and two-layer prefill is about 60×
-faster. The next quality scale is 64K rather than a further kernel rewrite.
+faster. The next quality scale is no longer merely 64K page-fine training:
+the flat page router still scores every historical page, so it cannot establish
+the document's subquadratic historical-attention claim. E29 introduces the
+causal hierarchical page-tree control before that scale run.
+
+## E29 — Causal hierarchical page-tree implementation
+
+### Purpose
+
+Move the experimental claim from “small exact retrieval after flat routing”
+to fixed-budget hierarchical historical lookup. The v1 path retains exact
+BF16 K/V pages and changes attention compute only; it does not claim KV-cache
+compression.
+
+### Implemented controls
+
+- `dense`: full causal attention reference.
+- `sliding`: fixed exact hot-window reference.
+- `flat`: exhaustive historical page scoring followed by exact page attention.
+- `tree`: causal 16-way page tree, beam four, four retrieved pages, and one
+  unified softmax over local plus retrieved K/V.
+
+`HierarchicalPageTree` supports preallocated causal page insertion. Each page
+is inserted only after completion, and insertion refreshes its ancestor path;
+decode search scores only fixed-width tree frontiers. The new tests verify
+tree traversal accounting and numerical equality with a reference attention
+operation over the identical gathered candidates.
+
+### Next measurement
+
+Run the tree control at 16K through 128K with an 8,192-token hot window and
+256-token pages. Report tree build/update, search, gather, and exact-attention
+times separately, then compare scaling against flat routing and dense
+FlashAttention. The Qwen3.5-4B integration uses the same model-neutral K/V
+core after its installed attention/cache signature is captured in a manifest.

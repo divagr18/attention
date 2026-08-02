@@ -26,6 +26,8 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
+from hierarchical_page_tree import HierarchicalPageTree
+
 
 KEY_COUNT = 64
 KEY_START = 1
@@ -62,6 +64,11 @@ class Config:
     retrieval_width: int = 3
     query_width: int = 3
     gradient_checkpointing: bool = False
+    router_index: str = "flat"
+    tree_fanout: int = 16
+    tree_beam: int = 4
+    retrieval_pages: int = 0  # zero inherits --top-blocks for compatibility
+    historical_store: str = "bf16"
 
 
 def make_batch(config: Config, device: torch.device, generator: torch.Generator) -> tuple[Tensor, Tensor, Tensor]:
@@ -172,7 +179,7 @@ class CausalAttention(nn.Module):
                 evidence = evidence_positions.unsqueeze(1) if evidence_positions.ndim == 1 else evidence_positions
                 offsets = torch.arange(3, device=x.device)
                 extra_indices = (evidence.unsqueeze(-1) + offsets).flatten(start_dim=1)
-            elif variant == "learned":
+            elif variant in ("learned", "flat", "tree"):
                 if retrieved_indices is None:
                     raise ValueError("learned attention needs retrieved indices")
                 extra_indices = retrieved_indices
@@ -211,7 +218,7 @@ class CausalAttention(nn.Module):
                 # The final query can recover the exact key, separator, and value tokens.
                 for offset in range(3):
                     allowed[batch_indices, length - 1, evidence_positions + offset] = True
-            if variant == "learned":
+            if variant in ("learned", "flat", "tree"):
                 if retrieved_indices is None:
                     raise ValueError("learned attention needs retrieved indices")
                 batch_indices = torch.arange(batch_size, device=x.device).unsqueeze(1)
@@ -245,31 +252,97 @@ class RouterOutput:
     block_scores: Tensor
     token_scores: Tensor
     retrieved_indices: Tensor
+    page_indices: Tensor | None = None
+    tree_score_count: int = 0
+    tree_depth: int = 0
+    tree_level_scores: tuple[Tensor, ...] = ()
 
 
 class HierarchicalRouter(nn.Module):
-    """Coarse block scoring followed by fine token scoring within top blocks."""
+    """Flat or fixed-budget tree page routing followed by exact fine scoring."""
 
     def __init__(self, d_model: int, query_width: int = 3) -> None:
         super().__init__()
         self.query = nn.Linear(d_model, d_model, bias=False)
         self.key = nn.Linear(d_model, d_model, bias=False)
+        self.page_summary = nn.Linear(2 * d_model, d_model, bias=False)
+        self.internal_summary = nn.Linear(2 * d_model, d_model, bias=False)
         self.query_width = query_width
 
-    def forward(self, embeddings: Tensor, *, historical_length: int, block_size: int, top_blocks: int, top_tokens: int, retrieval_unit: str = "span", retrieval_width: int = 3) -> RouterOutput:
+    def forward(
+        self,
+        embeddings: Tensor,
+        *,
+        historical_length: int,
+        block_size: int,
+        top_blocks: int,
+        top_tokens: int,
+        retrieval_unit: str = "span",
+        retrieval_width: int = 3,
+        router_index: str = "flat",
+        tree_fanout: int = 16,
+        tree_beam: int = 4,
+        retrieval_pages: int | None = None,
+    ) -> RouterOutput:
         if historical_length % block_size:
             raise ValueError("historical length must divide evenly into block_size")
         # Score record starts: include each key's following structural marker.
         record_embeddings = embeddings[:, :historical_length].clone()
         record_embeddings[:, :-1] = record_embeddings[:, :-1] + embeddings[:, 1:historical_length]
         query = self.query(embeddings[:, -self.query_width:].mean(dim=1))
-        keys = self.key(record_embeddings)
-        token_scores = torch.einsum("bd,btd->bt", query, keys) / math.sqrt(query.size(-1))
-        block_scores = token_scores.view(token_scores.size(0), historical_length // block_size, block_size).amax(dim=-1)
-        selected_blocks = block_scores.topk(top_blocks, dim=-1).indices
+        page_count = historical_length // block_size
+        full_token_scores = None
+        if router_index == "flat" or self.training:
+            # Full scores are used only for the flat control and router
+            # supervision.  The tree inference path does not score old tokens
+            # before page selection.
+            keys = self.key(record_embeddings)
+            full_token_scores = torch.einsum("bd,btd->bt", query, keys) / math.sqrt(query.size(-1))
+            block_scores = full_token_scores.view(full_token_scores.size(0), page_count, block_size).amax(dim=-1)
+        else:
+            block_scores = query.new_full((query.size(0), page_count), float("-inf"))
+        tree_level_scores: tuple[Tensor, ...] = ()
+        if router_index == "flat":
+            selected_blocks = block_scores.topk(top_blocks, dim=-1).indices
+            tree_score_count, tree_depth = page_count, 0
+        elif router_index == "tree":
+            if not retrieval_pages:
+                retrieval_pages = top_blocks
+            if retrieval_pages > tree_beam:
+                raise ValueError("tree retrieval_pages must be no greater than tree_beam")
+            page_records = record_embeddings.view(embeddings.size(0), page_count, block_size, -1)
+            page_mean = page_records.mean(dim=2)
+            page_max = page_records.amax(dim=2)
+            page_keys = self.page_summary(torch.cat((page_mean, page_max), dim=-1))
+            tree = HierarchicalPageTree.from_page_keys(
+                page_keys, fanout=tree_fanout, aggregate=self.internal_summary
+            )
+            if self.training:
+                # Training may score every stored summary to distil the path;
+                # inference never takes this exhaustive branch.
+                tree_level_scores = tuple(
+                    torch.einsum("bd,bnd->bn", query, level) / math.sqrt(query.size(-1))
+                    for level in tree.levels
+                )
+                block_scores = tree_level_scores[0]
+            search = tree.search(query, beam=tree_beam, retrieval_pages=retrieval_pages)
+            selected_blocks = search.page_indices
+            tree_score_count, tree_depth = search.score_count, search.depth
+        else:
+            raise ValueError(f"unknown router index: {router_index}")
         offsets = torch.arange(block_size, device=embeddings.device)
         candidates = (selected_blocks.unsqueeze(-1) * block_size + offsets).flatten(start_dim=1)
-        candidate_scores = token_scores.gather(1, candidates)
+        if full_token_scores is not None:
+            candidate_scores = full_token_scores.gather(1, candidates)
+            token_scores = full_token_scores
+        else:
+            selected_records = record_embeddings.gather(
+                1, candidates.unsqueeze(-1).expand(-1, -1, record_embeddings.size(-1))
+            )
+            selected_keys = self.key(selected_records)
+            candidate_scores = torch.einsum("bd,btd->bt", query, selected_keys) / math.sqrt(query.size(-1))
+            token_scores = query.new_full((query.size(0), historical_length), float("-inf"))
+            token_scores.scatter_(1, candidates, candidate_scores)
         centers = candidates.gather(1, candidate_scores.topk(top_tokens, dim=-1).indices)
         if retrieval_unit == "span":
             # A retrieved key token brings its short exact record with it.
@@ -287,7 +360,15 @@ class HierarchicalRouter(nn.Module):
             retrieved = (centers.unsqueeze(-1) + span_offsets).clamp_max(historical_length - 1).flatten(start_dim=1)
         else:
             raise ValueError(f"unknown retrieval unit: {retrieval_unit}")
-        return RouterOutput(block_scores=block_scores, token_scores=token_scores, retrieved_indices=retrieved)
+        return RouterOutput(
+            block_scores=block_scores,
+            token_scores=token_scores,
+            retrieved_indices=retrieved,
+            page_indices=selected_blocks,
+            tree_score_count=tree_score_count,
+            tree_depth=tree_depth,
+            tree_level_scores=tree_level_scores,
+        )
 
 
 class TinyRetrievalTransformer(nn.Module):
@@ -303,17 +384,34 @@ class TinyRetrievalTransformer(nn.Module):
         self.retrieval_unit = config.retrieval_unit
         self.retrieval_width = config.retrieval_width
         self.gradient_checkpointing = config.gradient_checkpointing
+        self.router_index = config.router_index
+        self.tree_fanout = config.tree_fanout
+        self.tree_beam = config.tree_beam
+        self.retrieval_pages = config.retrieval_pages
 
     def forward(self, tokens: Tensor, *, variant: str, local_window: int, evidence_positions: Tensor | None, block_size: int | None = None, top_blocks: int | None = None, top_tokens: int | None = None, capture_attention: bool = False, retrieved_indices_override: Tensor | None = None) -> tuple[Tensor, RouterOutput | None, Tensor | None]:
         positions = torch.arange(tokens.size(1), device=tokens.device)
         token_embeddings = self.token_embedding(tokens)
         routing = None
         retrieved_indices = None
-        if variant == "learned":
+        if variant in ("learned", "flat", "tree"):
             if block_size is None or top_blocks is None or top_tokens is None:
-                raise ValueError("learned attention needs router configuration")
+                raise ValueError("retrieval attention needs router configuration")
             if retrieved_indices_override is None:
-                routing = self.router(token_embeddings, historical_length=tokens.size(1) - local_window, block_size=block_size, top_blocks=top_blocks, top_tokens=top_tokens, retrieval_unit=self.retrieval_unit, retrieval_width=self.retrieval_width)
+                router_index = "tree" if variant == "tree" else self.router_index
+                routing = self.router(
+                    token_embeddings,
+                    historical_length=tokens.size(1) - local_window,
+                    block_size=block_size,
+                    top_blocks=top_blocks,
+                    top_tokens=top_tokens,
+                    retrieval_unit=self.retrieval_unit,
+                    retrieval_width=self.retrieval_width,
+                    router_index=router_index,
+                    tree_fanout=self.tree_fanout,
+                    tree_beam=self.tree_beam,
+                    retrieval_pages=self.retrieval_pages,
+                )
                 retrieved_indices = routing.retrieved_indices
             else:
                 retrieved_indices = retrieved_indices_override
@@ -367,7 +465,7 @@ def evaluate(model: TinyRetrievalTransformer, config: Config, device: torch.devi
         total += config.batch_size
     metrics = {"accuracy": correct / total}
     metrics.update({f"accuracy_{name}": successes / count if count else 0.0 for name, (successes, count) in by_bucket.items()})
-    if config.variant == "learned":
+    if config.variant in ("learned", "flat", "tree"):
         metrics["router_token_recall"] = router_token_hits / total
         metrics["router_block_recall"] = router_block_hits / total
         metrics["router_all_token_recall"] = router_all_token_hits / total
@@ -377,7 +475,7 @@ def evaluate(model: TinyRetrievalTransformer, config: Config, device: torch.devi
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", choices=("dense", "sliding", "oracle", "learned"), required=True)
+    parser.add_argument("--variant", choices=("dense", "sliding", "oracle", "learned", "flat", "tree"), required=True)
     parser.add_argument("--context", type=int, default=512)
     parser.add_argument("--local-window", type=int, default=64)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -395,6 +493,11 @@ def main() -> None:
     parser.add_argument("--retrieval-width", type=int, default=3, help="Promoted token count for span retrieval.")
     parser.add_argument("--task-family", choices=("single", "overwrite", "distractor", "mixed", "multirecord", "dual", "dual_parity"), default="single")
     parser.add_argument("--query-width", type=int, default=3)
+    parser.add_argument("--router-index", choices=("flat", "tree"), default="flat")
+    parser.add_argument("--tree-fanout", type=int, default=16)
+    parser.add_argument("--tree-beam", type=int, default=4)
+    parser.add_argument("--retrieval-pages", type=int, default=0, help="Tree leaf pages; zero inherits --top-blocks.")
+    parser.add_argument("--historical-store", choices=("bf16",), default="bf16")
     parser.add_argument("--gradient-checkpointing", action="store_true")
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--init-checkpoint", type=Path, help="Initialize model weights before training (for retrieval-unit curricula).")
@@ -406,8 +509,14 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     config = Config(**{name: getattr(args, name) for name in Config.__dataclass_fields__})
-    if config.variant == "learned" and (config.context - config.local_window) % config.block_size:
+    if config.variant == "tree":
+        config.router_index = "tree"
+    elif config.variant == "flat":
+        config.router_index = "flat"
+    if config.variant in ("learned", "flat", "tree") and (config.context - config.local_window) % config.block_size:
         parser.error("context - local-window must divide evenly into block-size")
+    if config.variant == "tree" and config.retrieval_pages and config.retrieval_pages > config.tree_beam:
+        parser.error("--retrieval-pages must be no greater than --tree-beam")
     device = torch.device(config.device)
     random.seed(config.seed)
     torch.manual_seed(config.seed)
@@ -451,10 +560,17 @@ def main() -> None:
         if routing is not None:
             if teacher is None:
                 block_targets = evidence_positions // config.block_size
+                def direct_tree_loss(target: Tensor, token_target: Tensor) -> Tensor:
+                    if not routing.tree_level_scores:
+                        return F.cross_entropy(routing.block_scores, target) + F.cross_entropy(routing.token_scores, token_target)
+                    losses = [F.cross_entropy(routing.token_scores, token_target)]
+                    for level, scores in enumerate(routing.tree_level_scores):
+                        losses.append(F.cross_entropy(scores, target // (config.tree_fanout ** level)))
+                    return sum(losses)
                 if evidence_positions.ndim == 1:
-                    router_loss = F.cross_entropy(routing.block_scores, block_targets) + F.cross_entropy(routing.token_scores, evidence_positions)
+                    router_loss = direct_tree_loss(block_targets, evidence_positions)
                 else:
-                    router_loss = sum(F.cross_entropy(routing.block_scores, block_targets[:, index]) + F.cross_entropy(routing.token_scores, evidence_positions[:, index]) for index in range(evidence_positions.size(1)))
+                    router_loss = sum(direct_tree_loss(block_targets[:, index], evidence_positions[:, index]) for index in range(evidence_positions.size(1)))
                 loss = loss + config.router_loss_weight * router_loss
             else:
                 with torch.no_grad():
@@ -470,7 +586,19 @@ def main() -> None:
                         historical_attention = span_attention
                     token_target = historical_attention / historical_attention.sum(dim=-1, keepdim=True).clamp_min(1e-8)
                     block_target = token_target.view(config.batch_size, -1, config.block_size).sum(dim=-1)
-                router_loss = F.kl_div(F.log_softmax(routing.token_scores, dim=-1), token_target, reduction="batchmean") + F.kl_div(F.log_softmax(routing.block_scores, dim=-1), block_target, reduction="batchmean")
+                router_loss = F.kl_div(F.log_softmax(routing.token_scores, dim=-1), token_target, reduction="batchmean")
+                if routing.tree_level_scores:
+                    level_target = block_target
+                    for level, scores in enumerate(routing.tree_level_scores):
+                        if level:
+                            groups = math.ceil(level_target.size(1) / config.tree_fanout)
+                            pad = groups * config.tree_fanout - level_target.size(1)
+                            if pad:
+                                level_target = F.pad(level_target, (0, pad))
+                            level_target = level_target.view(level_target.size(0), groups, config.tree_fanout).sum(dim=-1)
+                        router_loss = router_loss + F.kl_div(F.log_softmax(scores, dim=-1), level_target, reduction="batchmean")
+                else:
+                    router_loss = router_loss + F.kl_div(F.log_softmax(routing.block_scores, dim=-1), block_target, reduction="batchmean")
                 loss = loss + args.teacher_router_loss_weight * router_loss
         optimizer.zero_grad(set_to_none=True)
         loss.backward()

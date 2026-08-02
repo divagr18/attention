@@ -18,6 +18,7 @@ def main() -> None:
         ("sliding", None, None),
         ("oracle", evidence, None),
         ("learned", None, retrieved),
+        ("tree", None, retrieved),
     )
     for variant, positions, indices in cases:
         windowed, _ = attention(

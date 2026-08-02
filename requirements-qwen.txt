@@ -1,0 +1,6 @@
+# Optional real-model stack.  Install this on the 96GB RunPod image, after the
+# CUDA/Triton environment in requirements-runpod.txt.
+transformers>=5.0.0
+accelerate>=1.0.0
+peft>=0.18.0
+datasets>=3.0.0

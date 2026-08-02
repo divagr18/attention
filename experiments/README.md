@@ -54,6 +54,49 @@ answer evaluation uses only the router's hard block/token selection. It is a
 retrieval-mechanism proof, not yet teacher-free long-context language-model
 training.
 
+## Causal page-tree routing (subquadratic historical lookup)
+
+`hierarchical_page_tree.py` is the v1 historical index.  Completed pages are
+kept as exact BF16 K/V by the caller; the tree contains only page summaries.
+With a fixed fan-out and beam, search scores `O(beam * fanout * log(pages))`
+node summaries rather than every old page.  The exact attention operation is
+one unified softmax over the fixed hot window plus selected full pages.
+
+Run the numerical and causal-index regressions:
+
+```powershell
+python experiments/test_sparse_attention.py
+python experiments/test_hierarchical_page_tree.py
+```
+
+The tiny model now has four comparable controls: `dense`, `sliding` (local),
+`flat`, and `tree`.  This is a fast mechanism harness; `tree` uses full
+router scores during training supervision but only scores tree-selected page
+tokens at inference.
+
+```powershell
+python experiments/train_tiny_transformer.py --variant tree --task-family multirecord --context 16384 --local-window 256 --block-size 256 --top-blocks 4 --retrieval-pages 4 --tree-fanout 16 --tree-beam 4 --retrieval-unit page --top-tokens 1 --batch-size 1 --steps 1200 --eval-batches 256 --d-model 64 --layers 2 --heads 4 --learning-rate 0.0005 --router-loss-weight 1 --historical-store bf16 --checkpoint results/transformer_tree_page_16k.pt --output results/transformer_tree_page_16k.json
+```
+
+Benchmark router-inclusive controls.  `tree_initial_build_ms` is reported
+separately because a real causal prefill appends each page when it leaves the
+hot window; decode pays `tree_search_only` plus gather and exact attention.
+
+```bash
+.venv-runpod/bin/python experiments/benchmark_page_tree.py --context 131072 --hot-window 8192 --page-size 256 --tree-fanout 16 --tree-beam 4 --retrieval-pages 4 --heads 4 --head-dim 64 --output results/page_tree_128k.json
+```
+
+`cascading_kv_attention.py` is the model-neutral Q/K/V integration core.  It
+is intentionally BF16-only: quantization and latent compression are separate
+follow-on experiments.  On the 96GB pod, install the optional model stack and
+generate a version-locked Qwen integration manifest before binding the core
+to that release's projection/cache interface:
+
+```bash
+.venv-runpod/bin/pip install -r requirements-qwen.txt
+.venv-runpod/bin/python experiments/qwen35_cascading_adapter.py --output results/qwen35_adapter_manifest.json
+```
+
 ## 4K decode benchmark
 
 `benchmark_decode_attention.py` measures real CUDA decode operations over an

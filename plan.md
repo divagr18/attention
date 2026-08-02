@@ -155,14 +155,16 @@ calibration, and unwanted historical contribution.
 
 ## Follow-on Order
 
-1. Compact historical latents versus full historical KV.
-2. Promoted cache and fixed TTLs.
-3. Structural and learned anchors.
-4. Recurrent memory as a routing aid.
-5. Recurrent-to-exact layer ratios.
-6. Adaptive retrieval budgets.
-7. Tree/ANN block indexing.
-8. 128K through 1M-token scaling and hardware-aware kernels.
+1. Causal hierarchical page-tree indexing with fixed BF16 K/V pages.
+2. Dense/local/flat/tree scaling at 16K through 256K, including router and
+   gather costs.
+3. Bind the same K/V core to Qwen3.5-4B's periodic attention layers; preserve
+   its Gated DeltaNet layers and train router summaries before LoRA adaptation.
+4. Promoted cache and fixed TTLs.
+5. Structural and learned anchors.
+6. Recurrent-to-exact layer ratios and adaptive retrieval budgets.
+7. Only after the attention-quality/speed gate: int8 historical K/V and cold
+   latent-memory ablations.
 
 ## First Run Set
 
