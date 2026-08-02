@@ -87,6 +87,12 @@ hot window; decode pays `tree_search_only` plus gather and exact attention.
 .venv-runpod/bin/python experiments/benchmark_page_tree.py --context 131072 --hot-window 8192 --page-size 256 --tree-fanout 16 --tree-beam 1 --tree-leaf-slots 1 --tree-slots 4 --retrieval-pages 1 --heads 4 --head-dim 64 --output results/page_tree_128k.json
 ```
 
+After the 128K fused-tree correctness check, run the 1M crossover measurement:
+
+```bash
+bash scripts/runpod_1m_tree_crossover.sh
+```
+
 `cascading_kv_attention.py` is the model-neutral Q/K/V integration core.  It
 is intentionally BF16-only: quantization and latent compression are separate
 follow-on experiments.  On the 96GB pod, install the optional model stack and

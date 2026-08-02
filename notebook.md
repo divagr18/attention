@@ -1013,3 +1013,25 @@ Run the tree control at 16K through 128K with an 8,192-token hot window and
 times separately, then compare scaling against flat routing and dense
 FlashAttention. The Qwen3.5-4B integration uses the same model-neutral K/V
 core after its installed attention/cache signature is captured in a manifest.
+
+## E30 — Fused hierarchical tree traversal at 128K
+
+### Result
+
+The four-slot, beam-one tree preserved 100% answer and router accuracy when
+run against the frozen, converged two-layer 16K page-fine checkpoint. At 128K
+the routing tree compares 80 slots versus 480 flat pages. The first Triton
+kernel selected exactly the same page as the reference traversal, then
+reduced tree-search latency from 0.556 ms in generic PyTorch to 0.0195 ms
+(28.5x). Router plus PyTorch page gather/exact attention measured 0.107 ms,
+within 8% of flat routing's 0.099 ms.
+
+### Interpretation
+
+The quality and routing-work claims now hold for the synthetic structural
+task, and Python dispatch is no longer the decode bottleneck. Flat routing is
+still slightly faster at 128K because it scores only 480 page vectors in one
+efficient GPU operation. The meaningful crossover test is 1M context, where
+flat routing scores 4,064 pages while the fixed tree kernel still scores only
+144 slots. Causal tree updates remain unfused and are measured separately;
+they are the next prefill-kernel task.
