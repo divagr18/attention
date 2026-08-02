@@ -115,6 +115,12 @@ def main() -> None:
     tree = MultiVectorPageTree.from_page_slots(page_slots, fanout=config.tree_fanout, slots=config.tree_slots, slot_valid=slot_valid)
     synchronize(device)
     tree_build_ms = (time.perf_counter() - build_start) * 1e3
+    causal_build_start = time.perf_counter()
+    causal_tree = MultiVectorPageTree(fanout=config.tree_fanout, slots=config.tree_slots, max_pages=page_count)
+    for page in range(page_count):
+        causal_tree.append(page_slots[:, page], slot_valid[:, page])
+    synchronize(device)
+    causal_build_ms = (time.perf_counter() - causal_build_start) * 1e3
 
     def local() -> torch.Tensor:
         return exact_attention(query, keys[:, :, historical:], values[:, :, historical:])
@@ -143,6 +149,7 @@ def main() -> None:
             "tree_search_only": timed(search, config, device),
             "tree_router_gather_attention": timed(tree_path, config, device),
             "tree_initial_build_ms": tree_build_ms,
+            "tree_causal_append_build_ms": causal_build_ms,
         },
         "candidate_tokens": {
             "local": config.hot_window,

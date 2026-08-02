@@ -36,6 +36,11 @@ def main() -> None:
     multi_found = multi.search(torch.nn.functional.one_hot(torch.tensor([23]), 32).float(), beam=4, retrieval_pages=1)
     assert multi_found.page_indices.item() == 23
     assert multi_found.score_count < 32 * 4
+    causal_multi = MultiVectorPageTree(fanout=4, slots=4, max_pages=32)
+    for page in slots.unbind(dim=1):
+        causal_multi.append(page)
+    causal_found = causal_multi.search(torch.nn.functional.one_hot(torch.tensor([23]), 32).float(), beam=4, retrieval_pages=1)
+    assert causal_found.page_indices.item() == 23
 
     # The gathered tree candidates must use the same unified softmax as the
     # masked reference over precisely that candidate set.
