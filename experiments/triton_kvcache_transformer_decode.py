@@ -308,6 +308,9 @@ def main() -> None:
         "exact_router_model_accuracy": exact_correct / total,
         "triton_full_page_model_accuracy": page_correct / total,
         "triton_page_decode_ms": sum(page_times) / len(page_times),
+        "pytorch_routed_reroute_ms": sum(reroute_times) / len(reroute_times),
+        # Retained for compatibility with existing result readers. Before the
+        # windowed-attention update this was a full-matrix PyTorch control.
         "full_pytorch_reroute_ms": sum(reroute_times) / len(reroute_times),
         "triton_adaptive_page_decode_ms": sum(adaptive_times) / len(adaptive_times),
         "reroute_calls_per_episode": reroute_calls / args.episodes,
