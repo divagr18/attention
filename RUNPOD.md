@@ -66,3 +66,14 @@ run one matched 1,200-update continuation before changing the architecture:
 ```bash
 bash scripts/runpod_32k_2layer_pagefine_continue.sh 2>&1 | tee results/runpod_32k_2layer_pagefine_continue.log
 ```
+
+## 64K two-layer page-fine scale
+
+After the 32K continuation reaches the quality gate, the exact windowed local
+attention implementation makes a 64K continuation practical on the same
+hardware class. Run:
+
+```bash
+tmux new -s cascade64k
+bash scripts/runpod_64k_2layer_pagefine.sh 2>&1 | tee results/runpod_64k_2layer_pagefine.log
+```

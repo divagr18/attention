@@ -927,3 +927,31 @@ the retrieved span after direct 16K-to-32K position interpolation. The next
 controlled test is a further 1,200-update continuation at the same 32K
 configuration. If medium-distance quality remains poor, test an intermediate
 context-length bridge rather than scaling the retrieval budget.
+
+## E28 — Windowed local-attention regression at 32K
+
+### Purpose
+
+Replace the learned model's materialized local attention matrix with exact
+windowed attention, then verify numerical equivalence and remeasure the
+trained two-layer 32K model.
+
+### Result
+
+The windowed implementation matched the full masked reference at a maximum
+absolute error of 1.19e-7 for sliding, oracle, and learned retrieval. On the
+32K two-layer page-fine checkpoint:
+
+| Metric | Full-matrix local path | Windowed local path |
+|---|---:|---:|
+| K/V prefill | 138.69 ms | 2.31 ms |
+| PyTorch routed reroute | 277.47 ms | 4.65 ms |
+| Fused Triton decode | 0.591 ms | 0.553 ms |
+| Exact model / Triton accuracy | 100.0% / 100.0% | 100.0% / 100.0% |
+
+### Interpretation
+
+The quality result is unchanged while removing the quadratic local-attention
+workspace from the learned path. Triton remains about 8.4× faster than the
+now-fair windowed PyTorch routed control, and two-layer prefill is about 60×
+faster. The next quality scale is 64K rather than a further kernel rewrite.
