@@ -48,13 +48,14 @@ def first_number(text: str) -> str | None:
 
 @torch.no_grad()
 def generate_answer(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: int, mode: str, oracle_pages: list[int]) -> str:
-    # Eager prefill populates the cache identically for every condition.
-    model.config._attn_implementation = "eager"
+    # SDPA prefill (memory-efficient dense, O(L) memory) populates the cache for
+    # every condition, so the eval fits long context; only the decode differs.
+    model.config._attn_implementation = "sdpa"
     out = model(input_ids, use_cache=True)
     cache = out.past_key_values
     next_token = out.logits[:, -1:, :].argmax(dim=-1)
     generated = [next_token.item()]
-    model.config._attn_implementation = "eager" if mode == "dense" else "cascading"
+    model.config._attn_implementation = "sdpa" if mode == "dense" else "cascading"
     set_oracle_pages(oracle_pages if mode == "oracle" else None)
     eos = tokenizer.eos_token_id
     for _ in range(max_new_tokens - 1):
