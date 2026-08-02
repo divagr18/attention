@@ -35,12 +35,12 @@ class MultiVectorPageTree:
         self.valid_levels: list[Tensor] = []  # [batch, nodes, slots]
 
     @classmethod
-    def from_page_slots(cls, page_slots: Tensor, *, fanout: int, slot_valid: Tensor | None = None) -> "MultiVectorPageTree":
+    def from_page_slots(cls, page_slots: Tensor, *, fanout: int, slots: int | None = None, slot_valid: Tensor | None = None) -> "MultiVectorPageTree":
         if page_slots.ndim != 4:
             raise ValueError("page_slots must have shape [batch, pages, slots, channels]")
         if not page_slots.size(1):
             raise ValueError("at least one page is required")
-        tree = cls(fanout=fanout, slots=page_slots.size(2))
+        tree = cls(fanout=fanout, slots=slots or page_slots.size(2))
         tree.levels = [page_slots]
         tree.valid_levels = [slot_valid if slot_valid is not None else page_slots.square().sum(dim=-1).ne(0)]
         tree._rebuild_parents()
@@ -63,12 +63,14 @@ class MultiVectorPageTree:
             groups = math.ceil(source.size(1) / self.fanout)
             pad = groups * self.fanout - source.size(1)
             if pad:
-                source = torch.cat((source, source.new_zeros(source.size(0), pad, self.slots, source.size(-1))), dim=1)
-                source_valid = torch.cat((source_valid, torch.zeros(source_valid.size(0), pad, self.slots, device=source.device, dtype=torch.bool)), dim=1)
-            candidates = source.view(source.size(0), groups, self.fanout * self.slots, source.size(-1))
-            candidate_valid = source_valid.view(source_valid.size(0), groups, self.fanout * self.slots)
+                source = torch.cat((source, source.new_zeros(source.size(0), pad, source.size(2), source.size(-1))), dim=1)
+                source_valid = torch.cat((source_valid, torch.zeros(source_valid.size(0), pad, source_valid.size(2), device=source.device, dtype=torch.bool)), dim=1)
+            source_slots = source.size(2)
+            candidates = source.view(source.size(0), groups, self.fanout * source_slots, source.size(-1))
+            candidate_valid = source_valid.view(source_valid.size(0), groups, self.fanout * source_slots)
             norms = candidates.square().sum(dim=-1).masked_fill(~candidate_valid, float("-inf"))
-            keep = norms.topk(self.slots, dim=-1).indices
+            target_slots = min(self.slots, candidates.size(2))
+            keep = norms.topk(target_slots, dim=-1).indices
             source = candidates.gather(2, keep.unsqueeze(-1).expand(-1, -1, -1, candidates.size(-1)))
             source_valid = candidate_valid.gather(2, keep)
             levels.append(source)
@@ -100,16 +102,16 @@ class MultiVectorPageTree:
             safe_ids = child_ids.clamp_max(children.size(1) - 1)
             gathered = children.gather(
                 1,
-                safe_ids.reshape(batch, -1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.slots, children.size(-1)),
-            ).view(batch, current.size(1), self.fanout, self.slots, children.size(-1))
+                safe_ids.reshape(batch, -1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, children.size(2), children.size(-1)),
+            ).view(batch, current.size(1), self.fanout, children.size(2), children.size(-1))
             gathered_valid = children_valid.gather(
-                1, safe_ids.reshape(batch, -1).unsqueeze(-1).expand(-1, -1, self.slots)
-            ).view(batch, current.size(1), self.fanout, self.slots)
+                1, safe_ids.reshape(batch, -1).unsqueeze(-1).expand(-1, -1, children.size(2))
+            ).view(batch, current.size(1), self.fanout, children.size(2))
             scores = torch.einsum("bd,bnfsd->bnfs", query, gathered).masked_fill(~gathered_valid, float("-inf")).amax(dim=-1) / math.sqrt(query.size(-1))
             valid = valid & gathered_valid.any(dim=-1)
             scores = scores.masked_fill(~valid, float("-inf"))
             flat_scores, flat_ids = scores.flatten(1), child_ids.flatten(1)
             width = min(beam, int(valid.sum(dim=(1, 2)).min().item()))
             current = flat_ids.gather(1, flat_scores.topk(width, dim=-1).indices)
-            score_count += int(valid.sum(dim=(1, 2)).max().item()) * self.slots
+            score_count += int(valid.sum(dim=(1, 2)).max().item()) * children.size(2)
         return MultiVectorTreeSearch(current[:, :retrieval_pages], score_count, self.depth)

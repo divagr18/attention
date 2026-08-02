@@ -73,6 +73,7 @@ class Config:
     freeze_base_model: bool = False
     tree_summary: str = "pooled"
     tree_slots: int = 4
+    tree_leaf_slots: int = 1
 
 
 def make_batch(config: Config, device: torch.device, generator: torch.Generator) -> tuple[Tensor, Tensor, Tensor]:
@@ -289,6 +290,7 @@ class HierarchicalRouter(nn.Module):
         retrieval_pages: int | None = None,
         tree_summary: str = "pooled",
         tree_slots: int = 4,
+        tree_leaf_slots: int = 1,
         tokens: Tensor | None = None,
     ) -> RouterOutput:
         if historical_length % block_size:
@@ -337,14 +339,14 @@ class HierarchicalRouter(nn.Module):
                 # This is a structural index, not an evidence-position label.
                 record_mask = tokens[:, :historical_length].ge(KEY_START) & tokens[:, :historical_length].lt(KEY_START + KEY_COUNT)
                 slot_order = record_mask.view(embeddings.size(0), page_count, block_size).cumsum(dim=-1) - 1
-                valid_slots = record_mask.view(embeddings.size(0), page_count, block_size) & slot_order.lt(tree_slots)
+                valid_slots = record_mask.view(embeddings.size(0), page_count, block_size) & slot_order.lt(tree_leaf_slots)
                 projected = self.key(page_records)
-                page_slots = projected.new_zeros(embeddings.size(0), page_count, tree_slots, projected.size(-1))
-                slot_indices = slot_order.clamp_min(0).clamp_max(tree_slots - 1).unsqueeze(-1).expand_as(projected)
+                page_slots = projected.new_zeros(embeddings.size(0), page_count, tree_leaf_slots, projected.size(-1))
+                slot_indices = slot_order.clamp_min(0).clamp_max(tree_leaf_slots - 1).unsqueeze(-1).expand_as(projected)
                 page_slots.scatter_add_(2, slot_indices, projected * valid_slots.unsqueeze(-1))
-                page_slot_counts = torch.zeros(embeddings.size(0), page_count, tree_slots, device=embeddings.device, dtype=torch.long)
-                page_slot_counts.scatter_add_(2, slot_order.clamp_min(0).clamp_max(tree_slots - 1), valid_slots.long())
-                tree = MultiVectorPageTree.from_page_slots(page_slots, fanout=tree_fanout, slot_valid=page_slot_counts.bool())
+                page_slot_counts = torch.zeros(embeddings.size(0), page_count, tree_leaf_slots, device=embeddings.device, dtype=torch.long)
+                page_slot_counts.scatter_add_(2, slot_order.clamp_min(0).clamp_max(tree_leaf_slots - 1), valid_slots.long())
+                tree = MultiVectorPageTree.from_page_slots(page_slots, fanout=tree_fanout, slots=tree_slots, slot_valid=page_slot_counts.bool())
                 all_level_scores = tree.node_scores(query)
             else:
                 raise ValueError(f"unknown tree summary mode: {tree_summary}")
@@ -418,6 +420,7 @@ class TinyRetrievalTransformer(nn.Module):
         self.retrieval_pages = config.retrieval_pages
         self.tree_summary = config.tree_summary
         self.tree_slots = config.tree_slots
+        self.tree_leaf_slots = config.tree_leaf_slots
 
     def forward(self, tokens: Tensor, *, variant: str, local_window: int, evidence_positions: Tensor | None, block_size: int | None = None, top_blocks: int | None = None, top_tokens: int | None = None, capture_attention: bool = False, retrieved_indices_override: Tensor | None = None) -> tuple[Tensor, RouterOutput | None, Tensor | None]:
         positions = torch.arange(tokens.size(1), device=tokens.device)
@@ -443,6 +446,7 @@ class TinyRetrievalTransformer(nn.Module):
                     retrieval_pages=self.retrieval_pages,
                     tree_summary=self.tree_summary,
                     tree_slots=self.tree_slots,
+                    tree_leaf_slots=self.tree_leaf_slots,
                     tokens=tokens,
                 )
                 retrieved_indices = routing.retrieved_indices
@@ -533,6 +537,7 @@ def main() -> None:
     parser.add_argument("--historical-store", choices=("bf16",), default="bf16")
     parser.add_argument("--tree-summary", choices=("pooled", "structural_slots"), default="pooled")
     parser.add_argument("--tree-slots", type=int, default=4)
+    parser.add_argument("--tree-leaf-slots", type=int, default=1)
     parser.add_argument(
         "--freeze-base-model",
         action="store_true",
@@ -557,8 +562,8 @@ def main() -> None:
         parser.error("context - local-window must divide evenly into block-size")
     if config.variant == "tree" and config.retrieval_pages and config.retrieval_pages > config.tree_beam:
         parser.error("--retrieval-pages must be no greater than --tree-beam")
-    if config.tree_slots < 1:
-        parser.error("--tree-slots must be positive")
+    if config.tree_slots < 1 or config.tree_leaf_slots < 1:
+        parser.error("--tree-slots and --tree-leaf-slots must be positive")
     device = torch.device(config.device)
     random.seed(config.seed)
     torch.manual_seed(config.seed)

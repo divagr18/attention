@@ -16,8 +16,8 @@ fi
 "${PYTHON_BIN}" experiments/train_tiny_transformer.py \
   --variant tree --task-family multirecord \
   --context 16384 --local-window 64 --block-size 64 \
-  --top-blocks 1 --retrieval-pages 1 --tree-fanout 16 --tree-beam 4 \
-  --tree-summary structural_slots --tree-slots 4 \
+  --top-blocks 1 --retrieval-pages 1 --tree-fanout 16 --tree-beam 1 \
+  --tree-summary structural_slots --tree-leaf-slots 1 --tree-slots 4 \
   --retrieval-unit page_fine --retrieval-width 4 --top-tokens 1 --historical-store bf16 \
   --batch-size 1 --steps 0 --eval-batches 256 \
   --d-model 64 --layers 2 --heads 4 --learning-rate 0.0003 \

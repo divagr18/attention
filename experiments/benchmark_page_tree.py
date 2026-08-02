@@ -29,6 +29,7 @@ class Config:
     tree_fanout: int
     tree_beam: int
     tree_slots: int
+    tree_leaf_slots: int
     retrieval_pages: int
     batch_size: int
     heads: int
@@ -81,6 +82,7 @@ def main() -> None:
     parser.add_argument("--tree-fanout", type=int, default=16)
     parser.add_argument("--tree-beam", type=int, default=4)
     parser.add_argument("--tree-slots", type=int, default=4)
+    parser.add_argument("--tree-leaf-slots", type=int, default=1)
     parser.add_argument("--retrieval-pages", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--heads", type=int, default=4)
@@ -106,11 +108,11 @@ def main() -> None:
     router_query = query.mean(dim=1)
     page_keys = keys[:, :, :historical].view(config.batch_size, config.heads, page_count, config.page_size, config.head_dim).mean(dim=(1, 3))
     build_start = time.perf_counter()
-    page_slots = page_keys.new_zeros(config.batch_size, page_count, config.tree_slots, config.head_dim)
+    page_slots = page_keys.new_zeros(config.batch_size, page_count, config.tree_leaf_slots, config.head_dim)
     page_slots[:, :, 0] = page_keys
-    slot_valid = torch.zeros(config.batch_size, page_count, config.tree_slots, dtype=torch.bool, device=device)
+    slot_valid = torch.zeros(config.batch_size, page_count, config.tree_leaf_slots, dtype=torch.bool, device=device)
     slot_valid[:, :, 0] = True
-    tree = MultiVectorPageTree.from_page_slots(page_slots, fanout=config.tree_fanout, slot_valid=slot_valid)
+    tree = MultiVectorPageTree.from_page_slots(page_slots, fanout=config.tree_fanout, slots=config.tree_slots, slot_valid=slot_valid)
     synchronize(device)
     tree_build_ms = (time.perf_counter() - build_start) * 1e3
 

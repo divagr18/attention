@@ -76,7 +76,7 @@ router scores during training supervision but only scores tree-selected page
 tokens at inference.
 
 ```powershell
-python experiments/train_tiny_transformer.py --variant tree --task-family multirecord --context 16384 --local-window 64 --block-size 64 --top-blocks 1 --retrieval-pages 1 --tree-fanout 16 --tree-beam 4 --tree-summary structural_slots --tree-slots 4 --retrieval-unit page_fine --retrieval-width 4 --top-tokens 1 --batch-size 1 --steps 0 --eval-batches 256 --d-model 64 --layers 2 --heads 4 --learning-rate 0.0003 --router-loss-weight 1 --historical-store bf16 --gradient-checkpointing --freeze-base-model --init-checkpoint results/transformer_learned_pagefine1_2layer_16k.pt --output results/transformer_tree_slots_pagefine1_2layer_16k.json
+python experiments/train_tiny_transformer.py --variant tree --task-family multirecord --context 16384 --local-window 64 --block-size 64 --top-blocks 1 --retrieval-pages 1 --tree-fanout 16 --tree-beam 1 --tree-summary structural_slots --tree-leaf-slots 1 --tree-slots 4 --retrieval-unit page_fine --retrieval-width 4 --top-tokens 1 --batch-size 1 --steps 0 --eval-batches 256 --d-model 64 --layers 2 --heads 4 --learning-rate 0.0003 --router-loss-weight 1 --historical-store bf16 --gradient-checkpointing --freeze-base-model --init-checkpoint results/transformer_learned_pagefine1_2layer_16k.pt --output results/transformer_tree_slots_pagefine1_2layer_16k.json
 ```
 
 Benchmark router-inclusive controls.  `tree_initial_build_ms` is reported
@@ -84,7 +84,7 @@ separately because a real causal prefill appends each page when it leaves the
 hot window; decode pays `tree_search_only` plus gather and exact attention.
 
 ```bash
-.venv-runpod/bin/python experiments/benchmark_page_tree.py --context 131072 --hot-window 8192 --page-size 256 --tree-fanout 16 --tree-beam 4 --tree-slots 4 --retrieval-pages 4 --heads 4 --head-dim 64 --output results/page_tree_128k.json
+.venv-runpod/bin/python experiments/benchmark_page_tree.py --context 131072 --hot-window 8192 --page-size 256 --tree-fanout 16 --tree-beam 1 --tree-leaf-slots 1 --tree-slots 4 --retrieval-pages 1 --heads 4 --head-dim 64 --output results/page_tree_128k.json
 ```
 
 `cascading_kv_attention.py` is the model-neutral Q/K/V integration core.  It
