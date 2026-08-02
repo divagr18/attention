@@ -1035,3 +1035,151 @@ efficient GPU operation. The meaningful crossover test is 1M context, where
 flat routing scores 4,064 pages while the fixed tree kernel still scores only
 144 slots. Causal tree updates remain unfused and are measured separately;
 they are the next prefill-kernel task.
+
+## E31 — Qwen3.5-4B real-model binding and decode parity
+
+### Purpose
+
+Bind the model-neutral cascading core to a real hybrid LM and verify the sparse
+decode is faithful to dense attention before measuring quality.
+
+### Setup
+
+A custom attention function is registered in transformers'
+`ALL_ATTENTION_FUNCTIONS` for the eight full-attention layers (indices
+3,7,...,31) of Qwen3.5-4B (GQA 16:4, head_dim 256, partial RoPE on 64 dims).
+The host forward (q_proj, query/gate split, q_norm/k_norm, partial RoPE,
+`cache.update`, sigmoid output gate, o_proj) is reused verbatim; only the
+softmax kernel is swapped for the cascading core (local window plus retrieved
+pages). Prefill uses SDPA (O(L) memory); decode uses the cascading kernel.
+Parity gates compare eager vs cascading decode in fp32: Gate 1 is a short
+prefix (page_count=0, dense-equivalent), Gate 2 forces retrieval of every page
+(candidates == full context).
+
+### Result
+
+| Gate | Max abs error vs eager |
+|---|---:|
+| Gate 1 (page_count=0) | 0.0 |
+| Gate 2 (forced full retrieval) | 2.4e-7 |
+
+### Interpretation
+
+The binding is numerically faithful: reusing the host forward and swapping only
+the softmax reproduces eager decode to fp32 precision, and the 24 Gated DeltaNet
+layers are untouched. This validates the integration boundary; quality is
+measured next.
+
+## E32 — Single-needle NIAH and dense-teacher router distillation
+
+### Purpose
+
+Measure whether the cascading decode preserves retrieval quality on a real
+model, and train the router (page_summary, query_proj) from dense attention.
+
+### Setup
+
+Needle-in-a-haystack: a "magic number" needle in filler, query at the end,
+answer generated in decode. Conditions: dense (SDPA throughout), oracle
+(force-promote the needle's page), routed (router selects flat top-k pages).
+The router is trained offline: a teacher-capture pass records each
+full-attention layer's decode-step attention, aggregated to a renormalized
+page-mass target plus mean/max page keys and the head-averaged query; the tiny
+router (page_summary + query_proj, ~200K params, base frozen) is trained with
+forward KL.
+
+### Result (4K context)
+
+| Condition | Accuracy |
+|---|---:|
+| dense | 0.81 |
+| oracle | 0.81 |
+| routed (untrained) | 0.38 |
+| routed (distilled) | 0.81 |
+
+### Interpretation
+
+oracle == dense: the local window plus the needle's page is sufficient, so the
+architecture is lossless on single-needle retrieval. The untrained router
+finds the needle only ~38% of the time; dense-teacher distillation brings
+routed to parity with dense (recall@4 reaches 1.0 within ~50 steps).
+
+## E33 — Length-invariant routing via RoPE-dim zeroing (32K, 64K)
+
+### Purpose
+
+Test whether the 4K-trained router transfers to longer context.
+
+### Setup
+
+The router routes on post-RoPE K/Q, so query·page scores encode the relative
+position learned at 4K. Zeroing the leading 64 RoPE dims in the routing path
+(both teacher capture and binding) makes routing content-based and
+length-invariant. The router is re-distilled on RoPE-zeroed inputs and
+evaluated at 32K and 64K (SDPA prefill, cascading decode).
+
+### Result
+
+| Context | dense | oracle | routed (RoPE-zeroed) |
+|---|---:|---:|---:|
+| 32K | 1.0 | 1.0 | 1.0 |
+| 64K | 1.0 | 1.0 | 1.0 |
+
+Without RoPE-zeroing, routed held 1.0 at depths 0.0/0.25 but dropped at depths
+0.5/0.75 at 32K (the 4K relative-position encoding did not transfer); zeroing
+the RoPE dims removed this gap.
+
+### Interpretation
+
+With content-based routing, the 4K-trained router transfers to 32K (252 pages)
+and 64K (512 pages) with no degradation: routed == dense == oracle at every
+depth. The single-needle thesis is validated across a 16x page-count increase.
+The remaining unmeasured claim is subquadratic compute (the eval still prefills
+with SDPA, O(L^2) compute though O(L) memory).
+
+## E34 — RULER multi-needle retrieval (discrimination limit)
+
+### Purpose
+
+Test the router beyond single-needle: several (key, value) needles in distinct
+pages, query one key's value, so the router must discriminate the target page
+from distractor needles.
+
+### Setup
+
+Eight needles in distinct pages of a 32K context; query one key's value.
+Conditions dense/oracle/routed as before, sweeping the retrieval budget.
+
+### Result (32K, 8 needles)
+
+| retrieval_pages | dense | oracle | routed |
+|---:|---:|---:|---:|
+| 1 | 0.75 | 0.75 | 0.25 |
+| 4 | 0.75 | 0.75 | 0.38 |
+| 8 | 0.75 | 0.75 | 0.63 |
+
+(The 0.75 dense/oracle ceiling is the difficulty of copying a 4-digit value,
+not an architecture effect. A count-occurrences aggregation variant scored 0.0
+for both dense and routed — exact counting is beyond the base model — so it is
+not informative about the architecture and is set aside.)
+
+### Interpretation
+
+oracle == dense, so the architecture is fine; the router is the limit. routed
+at retrieval_pages=1 is 0.25, not 0.75: the router ranks the target page first
+only ~1/3 of the time. More pages help by brute force (rp=8 sweeps in all eight
+needles), not by discrimination. The cause is structural: the page summary is a
+mean/max over 128 tokens (~118 filler), so the 10-token needle's key is averaged
+out and all eight needle pages look alike to the router. Distillation could not
+fix this (train recall@4 = 1.0 from step 1 — the features do not separate the
+keys).
+
+### Pending — multiple routing vectors per page
+
+The designed fix (architecture doc §8.3, §22.3): store several salient-token
+routing vectors per page (the key token is highly salient) and route by
+max-similarity over them, instead of one mean/max summary.
+`multi_vector_page_tree.py` already provides the multi-slot tree; the binding
+currently uses the single-vector path. **Deferred**: the single-needle thesis
+is proven and the priority is the subquadratic-prefill efficiency measurement.
+Multi-needle discrimination is the next retrieval-quality work item.
