@@ -28,6 +28,6 @@ fi
 
 "${PYTHON_BIN}" experiments/benchmark_page_tree.py \
   --context 131072 --hot-window 8192 --page-size 256 \
-  --tree-fanout 16 --tree-beam 4 --retrieval-pages 4 \
+  --tree-fanout 16 --tree-beam 1 --tree-leaf-slots 1 --tree-slots 4 --retrieval-pages 1 \
   --heads 4 --head-dim 16 \
   --output results/page_tree_128k.json
