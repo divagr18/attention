@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Generate offline router-distillation targets from Qwen3.5's dense attention.
 
-For each NIAH example, prefills the prompt eagerly, then decodes the final query
-token through a teacher-capture attention function that records each
-full-attention layer's query, post-RoPE key, and attention weights.  From these
-it derives the renormalized page-mass teacher target and the router inputs
-(mean/max page keys and head-averaged query), averaged over the full-attention
-layers, and saves them so the tiny router trains without the large model.
+For each NIAH example, prefills the prompt, then decodes the final query token
+through a teacher-capture attention function that records each full-attention
+layer's attention.  The capture aggregates to tiny per-page summaries on-GPU
+(renormalized page-mass target, mean/max page keys, head-averaged query),
+averaged over the full-attention layers, so the tiny router trains offline
+without the large model and without large host transfers.
 """
 
 from __future__ import annotations
@@ -23,8 +23,10 @@ FULL_ATTENTION_INTERVAL = 4  # full attention every 4th layer: indices 3,7,...,3
 CAPTURED: dict[int, dict[str, torch.Tensor]] = {}
 
 
-def install_teacher_capture() -> None:
+def install_teacher_capture(page_count: int, page_size: int) -> None:
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+    paged = page_count * page_size
 
     def teacher_capture_forward(module, query, key, value, attention_mask=None, **kwargs):
         # Standard eager attention (GQA repeat, scaled dot-product, additive mask,
@@ -42,11 +44,19 @@ def install_teacher_capture() -> None:
         attn_weights = attn_weights.softmax(dim=-1, dtype=torch.float32).to(query.dtype)
         attn_output = torch.matmul(attn_weights, value)
         layer_idx = getattr(module, "layer_idx", None)
-        if layer_idx is not None:
+        # Only the single-query decode step is captured; skip the prefill call and
+        # aggregate to per-page summaries on-GPU to avoid large host transfers.
+        if layer_idx is not None and query.size(2) == 1:
+            with torch.no_grad():
+                attn = attn_weights[0, :, 0, :].mean(dim=0)
+                page_mass = attn[:paged].view(page_count, page_size).sum(dim=1)
+                paged_key = key[0, :, :paged, :].view(key.size(1), page_count, page_size, -1)
+                page_keys_mm = torch.cat((paged_key.mean(dim=(0, 2)), paged_key.amax(dim=(0, 2))), dim=-1)
+                query_avg = query[0, :, 0, :].mean(dim=0)
             CAPTURED[layer_idx] = {
-                "query": query.detach().float().cpu(),
-                "key": key.detach().float().cpu(),
-                "attn_weights": attn_weights.detach().float().cpu(),
+                "page_mass": page_mass.detach().float().cpu(),
+                "page_keys": page_keys_mm.detach().float().cpu(),
+                "query": query_avg.detach().float().cpu(),
             }
         return attn_output, attn_weights
 
@@ -69,8 +79,10 @@ def main() -> None:
     torch.manual_seed(args.seed)
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    install_teacher_capture()
     tokenizer = AutoTokenizer.from_pretrained(args.model)
+    bos_len = 1 if tokenizer.bos_token_id is not None else 0
+    page_count = (args.context_tokens + bos_len - args.hot_window) // args.page_size
+    install_teacher_capture(page_count, args.page_size)
     model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16, attn_implementation="teacher_capture").cuda().eval()
     config = model.config
     num_layers = getattr(config, "num_hidden_layers", None) or config.text_config.num_hidden_layers
@@ -83,9 +95,6 @@ def main() -> None:
             number = random.randint(100, 999)
             depth = random.uniform(0.0, args.max_depth)
             input_ids, _, _ = build_niah(tokenizer, args.context_tokens, depth, number)
-            length = input_ids.size(1)
-            page_count = (length - args.hot_window) // args.page_size
-            paged = page_count * args.page_size
 
             CAPTURED.clear()
             cache = model(input_ids[:, :-1], use_cache=True).past_key_values
@@ -96,19 +105,17 @@ def main() -> None:
             usable = True
             for layer_idx in full_attention_layers:
                 cap = CAPTURED.get(layer_idx)
-                if cap is None or cap["attn_weights"] is None:
+                if cap is None:
                     usable = False
                     break
-                attn = cap["attn_weights"][0, :, 0, :].mean(dim=0)  # [L], head-averaged
-                page_mass = attn[:paged].view(page_count, args.page_size).sum(dim=1)
+                page_mass = cap["page_mass"]
                 total = page_mass.sum()
                 if total < 1e-3:
                     usable = False
                     break
                 layer_targets.append(page_mass / total)
-                paged_key = cap["key"][0, :, :paged, :].view(cap["key"].size(1), page_count, args.page_size, -1)
-                layer_page_keys.append(torch.cat((paged_key.mean(dim=(0, 2)), paged_key.amax(dim=(0, 2))), dim=-1))
-                layer_queries.append(cap["query"][0, :, 0, :].mean(dim=0))
+                layer_page_keys.append(cap["page_keys"])
+                layer_queries.append(cap["query"])
             if not usable:
                 skipped += 1
                 continue
@@ -122,7 +129,7 @@ def main() -> None:
         "targets": torch.stack(targets),
         "page_keys": torch.stack(page_keys_list),
         "queries": torch.stack(queries),
-        "page_count": page_count if targets else 0,
+        "page_count": page_count,
         "page_size": args.page_size,
         "hot_window": args.hot_window,
         "context_tokens": args.context_tokens,
