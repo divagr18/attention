@@ -17,8 +17,16 @@ import json
 from pathlib import Path
 
 import torch
-
 from cascading_kv_attention import CascadingAttentionConfig, CascadingKVAttention
+
+_ORACLE_PAGE_INDEX: int | None = None
+
+
+def set_oracle_page(index: int | None) -> None:
+    """Force every layer to promote one page (oracle retrieval); None restores routing."""
+    global _ORACLE_PAGE_INDEX
+    _ORACLE_PAGE_INDEX = index
+
 
 def make_cascading_attention(config: CascadingAttentionConfig):
     """Build a transformers-compatible attention fn backed by the cascading core."""
@@ -44,7 +52,10 @@ def make_cascading_attention(config: CascadingAttentionConfig):
             paged = page_count * config.page_size
             page_keys = key[:, :, :paged].view(key.size(0), heads, page_count, config.page_size, key.size(-1)).mean(dim=(1, 3))
             tree = core.make_tree(page_keys)
-        output, _ = core(query[:, :, 0, :].contiguous(), key.contiguous(), value.contiguous(), tree=tree)
+        force_page_indices = None
+        if _ORACLE_PAGE_INDEX is not None and page_count:
+            force_page_indices = key.new_full((key.size(0), 1), _ORACLE_PAGE_INDEX, dtype=torch.long)
+        output, _ = core(query[:, :, 0, :].contiguous(), key.contiguous(), value.contiguous(), tree=tree, force_page_indices=force_page_indices)
         return output.unsqueeze(2).transpose(1, 2).contiguous(), None
 
     return cascading_attention_forward

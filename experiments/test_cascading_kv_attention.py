@@ -43,6 +43,17 @@ def main() -> None:
     assert error < 1e-4, f"gate2 (full-retrieval) mismatch: {error}"
     print(f"gate2 full-retrieval parity: max error {error:.2e}")
 
+    forced_page = 2
+    output, search = core(query, keys, values, tree=tree, force_page_indices=torch.tensor([[forced_page], [forced_page]]))
+    assert search is None, "force_page_indices must bypass the tree search"
+    paged = page_count * config.page_size
+    page_start = forced_page * config.page_size
+    ref_keys = torch.cat((keys[:, :, paged:], keys[:, :, page_start : page_start + config.page_size]), dim=2)
+    ref_values = torch.cat((values[:, :, paged:], values[:, :, page_start : page_start + config.page_size]), dim=2)
+    error = (output.float() - dense_reference(query, ref_keys, ref_values)).abs().max().item()
+    assert error < 1e-4, f"gate3 (oracle) mismatch: {error}"
+    print(f"gate3 oracle-force parity: max error {error:.2e}")
+
 
 if __name__ == "__main__":
     main()

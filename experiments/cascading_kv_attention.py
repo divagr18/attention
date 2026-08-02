@@ -49,15 +49,16 @@ class CascadingKVAttention(nn.Module):
         """
         return HierarchicalPageTree.from_page_keys(router_keys, fanout=self.config.tree_fanout, aggregate=self.internal_summary)
 
-    def forward(self, query: Tensor, keys: Tensor, values: Tensor, tree: HierarchicalPageTree | None = None) -> tuple[Tensor, TreeSearch | None]:
-        """Attend exactly over local K/V plus tree-selected historical pages.
+    def forward(self, query: Tensor, keys: Tensor, values: Tensor, tree: HierarchicalPageTree | None = None, force_page_indices: Tensor | None = None) -> tuple[Tensor, TreeSearch | None]:
+        """Attend exactly over local K/V plus selected historical pages.
 
         Shapes are ``query=[B,H,D]`` and ``keys/values=[B,H,L,D]``.  The paged
         prefix length is ``tree.page_count * page_size``; everything after it is
         the local region (at least ``hot_window`` tokens once the caller appends
         pages as they leave the window).  With no completed pages the core is a
-        single dense softmax over the full sequence.  Router keys must share D
-        and are derived by the host attention layer.
+        single dense softmax over the full sequence.  ``force_page_indices``
+        ``[B,n]`` overrides the tree search and gathers those pages directly
+        (oracle retrieval).  Router keys share D and come from the host layer.
         """
         if keys.shape != values.shape or query.ndim != 3 or keys.ndim != 4:
             raise ValueError("expected query [B,H,D] and equal keys/values [B,H,L,D]")
@@ -69,13 +70,18 @@ class CascadingKVAttention(nn.Module):
         local_k = keys[:, :, paged:]
         local_v = values[:, :, paged:]
         search = None
-        if page_count:
+        page_indices = force_page_indices
+        if page_indices is None and page_count:
             search = tree.search(query.mean(dim=1), beam=self.config.tree_beam, retrieval_pages=self.config.retrieval_pages)
+            page_indices = search.page_indices
+        if page_indices is not None:
+            if paged == 0:
+                raise ValueError("force_page_indices requires a non-empty paged prefix")
             key_pages = keys[:, :, :paged].view(keys.size(0), keys.size(1), page_count, self.config.page_size, keys.size(-1)).permute(0, 2, 1, 3, 4)
             value_pages = values[:, :, :paged].view(values.size(0), values.size(1), page_count, self.config.page_size, values.size(-1)).permute(0, 2, 1, 3, 4)
             batch = torch.arange(keys.size(0), device=keys.device).unsqueeze(1)
-            retrieved_keys = key_pages[batch, search.page_indices].permute(0, 2, 1, 3, 4).flatten(start_dim=2, end_dim=3)
-            retrieved_values = value_pages[batch, search.page_indices].permute(0, 2, 1, 3, 4).flatten(start_dim=2, end_dim=3)
+            retrieved_keys = key_pages[batch, page_indices].permute(0, 2, 1, 3, 4).flatten(start_dim=2, end_dim=3)
+            retrieved_values = value_pages[batch, page_indices].permute(0, 2, 1, 3, 4).flatten(start_dim=2, end_dim=3)
             candidates_k = torch.cat((local_k, retrieved_keys), dim=2)
             candidates_v = torch.cat((local_v, retrieved_values), dim=2)
         else:
