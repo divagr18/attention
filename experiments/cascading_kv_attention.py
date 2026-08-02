@@ -39,6 +39,7 @@ class CascadingKVAttention(nn.Module):
         self.config = config
         self.page_summary = nn.Linear(2 * channels, channels, bias=False)
         self.internal_summary = nn.Linear(2 * channels, channels, bias=False)
+        self.query_proj = nn.Linear(channels, channels, bias=False)
 
     def make_tree(self, router_keys: Tensor) -> HierarchicalPageTree:
         """Create an offline/static tree from [batch, pages, channels] keys.
@@ -72,7 +73,7 @@ class CascadingKVAttention(nn.Module):
         search = None
         page_indices = force_page_indices
         if page_indices is None and page_count:
-            search = tree.search(query.mean(dim=1), beam=self.config.tree_beam, retrieval_pages=self.config.retrieval_pages)
+            search = tree.search(self.query_proj(query.mean(dim=1)), beam=self.config.tree_beam, retrieval_pages=self.config.retrieval_pages)
             page_indices = search.page_indices
         if page_indices is not None:
             if paged == 0:

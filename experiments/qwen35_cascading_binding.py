@@ -28,6 +28,15 @@ def set_oracle_pages(pages: list[int] | None) -> None:
     _ORACLE_PAGES = pages
 
 
+_ROUTER_WEIGHTS: dict[str, torch.Tensor] | None = None
+
+
+def set_router_weights(weights: dict[str, torch.Tensor] | None) -> None:
+    """Load trained router projections (page_summary, query_proj) into the core on first use."""
+    global _ROUTER_WEIGHTS
+    _ROUTER_WEIGHTS = weights
+
+
 def make_cascading_attention(config: CascadingAttentionConfig):
     """Build a transformers-compatible attention fn backed by the cascading core."""
     core_holder: dict[str, CascadingKVAttention] = {}
@@ -37,7 +46,12 @@ def make_cascading_attention(config: CascadingAttentionConfig):
             raise NotImplementedError("cascading binding is decode-only (S==1) in v1; prefill needs causal masking")
         if "core" not in core_holder:
             # Match the host model's dtype so the tree's summary projections agree with the K/V.
-            core_holder["core"] = CascadingKVAttention(query.size(-1), config).to(device=query.device, dtype=query.dtype).eval()
+            core = CascadingKVAttention(query.size(-1), config).to(device=query.device, dtype=query.dtype).eval()
+            if _ROUTER_WEIGHTS is not None:
+                with torch.no_grad():
+                    core.page_summary.weight.copy_(_ROUTER_WEIGHTS["page_summary"].to(query.dtype))
+                    core.query_proj.weight.copy_(_ROUTER_WEIGHTS["query_proj"].to(query.dtype))
+            core_holder["core"] = core
         core = core_holder["core"]
         heads = query.size(1)
         kv_heads = key.size(1)
@@ -49,9 +63,10 @@ def make_cascading_attention(config: CascadingAttentionConfig):
         page_count = max(0, (length - config.hot_window) // config.page_size)
         tree = None
         if page_count:
-            # Head-collapsed page summaries drive routing; the core gathers exact K/V.
+            # Mean/max page summaries drive routing; the core gathers exact K/V.
             paged = page_count * config.page_size
-            page_keys = key[:, :, :paged].view(key.size(0), heads, page_count, config.page_size, key.size(-1)).mean(dim=(1, 3))
+            page_kv = key[:, :, :paged].view(key.size(0), heads, page_count, config.page_size, key.size(-1))
+            page_keys = core.page_summary(torch.cat((page_kv.mean(dim=(1, 3)), page_kv.amax(dim=(1, 3))), dim=-1))
             tree = core.make_tree(page_keys)
         force_page_indices = None
         if _ORACLE_PAGES and page_count:
