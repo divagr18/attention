@@ -982,6 +982,18 @@ decode search scores only fixed-width tree frontiers. The new tests verify
 tree traversal accounting and numerical equality with a reference attention
 operation over the identical gathered candidates.
 
+### Warm-up correction
+
+The first tree launch was not a valid quality comparison: it trained a new
+two-layer 16K model from scratch with different page/window settings, and it
+updated the already-converged base model while random tree summaries selected
+the wrong pages. A matched flat control loaded the established two-layer
+page-fine checkpoint and retained 100% answer and router accuracy. Tree
+warm-up now freezes every base-model and existing flat-router parameter and
+trains only the new page-summary and internal-summary projections. End-to-end
+adaptation is deferred until the frozen tree router reaches the flat control's
+recall.
+
 ### Next measurement
 
 Run the tree control at 16K through 128K with an 8,192-token hot window and

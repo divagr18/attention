@@ -69,6 +69,7 @@ class Config:
     tree_beam: int = 4
     retrieval_pages: int = 0  # zero inherits --top-blocks for compatibility
     historical_store: str = "bf16"
+    freeze_base_model: bool = False
 
 
 def make_batch(config: Config, device: torch.device, generator: torch.Generator) -> tuple[Tensor, Tensor, Tensor]:
@@ -498,6 +499,11 @@ def main() -> None:
     parser.add_argument("--tree-beam", type=int, default=4)
     parser.add_argument("--retrieval-pages", type=int, default=0, help="Tree leaf pages; zero inherits --top-blocks.")
     parser.add_argument("--historical-store", choices=("bf16",), default="bf16")
+    parser.add_argument(
+        "--freeze-base-model",
+        action="store_true",
+        help="Train only new tree page/internal summaries after loading a converged checkpoint.",
+    )
     parser.add_argument("--gradient-checkpointing", action="store_true")
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--init-checkpoint", type=Path, help="Initialize model weights before training (for retrieval-unit curricula).")
@@ -542,7 +548,19 @@ def main() -> None:
         unexpected = [key for key in incompatible.unexpected_keys if not key.startswith("blocks.")]
         if unexpected:
             raise RuntimeError(f"unexpected initialization keys: {unexpected}")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+    if config.freeze_base_model:
+        if config.variant != "tree":
+            parser.error("--freeze-base-model is only valid with --variant tree")
+        for parameter in model.parameters():
+            parameter.requires_grad_(False)
+        # The existing flat query/key router and Transformer remain fixed;
+        # warm-up learns only the newly introduced causal-tree summaries.
+        for parameter in (*model.router.page_summary.parameters(), *model.router.internal_summary.parameters()):
+            parameter.requires_grad_(True)
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    if not trainable_parameters:
+        parser.error("no trainable parameters selected")
+    optimizer = torch.optim.AdamW(trainable_parameters, lr=config.learning_rate)
     teacher = None
     if args.teacher_checkpoint is not None:
         checkpoint = torch.load(args.teacher_checkpoint, map_location=device, weights_only=True)
@@ -608,7 +626,14 @@ def main() -> None:
             print(f"step={step} loss={loss.detach().item():.4f}", flush=True)
     elapsed_seconds = time.perf_counter() - start
     metrics = evaluate(model, config, device, generator)
-    report = {"config": asdict(config), "parameters": sum(parameter.numel() for parameter in model.parameters()), "elapsed_seconds": elapsed_seconds, "history": history, "evaluation": metrics}
+    report = {
+        "config": asdict(config),
+        "parameters": sum(parameter.numel() for parameter in model.parameters()),
+        "trainable_parameters": sum(parameter.numel() for parameter in trainable_parameters),
+        "elapsed_seconds": elapsed_seconds,
+        "history": history,
+        "evaluation": metrics,
+    }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     if args.checkpoint is not None:

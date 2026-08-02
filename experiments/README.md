@@ -75,7 +75,7 @@ router scores during training supervision but only scores tree-selected page
 tokens at inference.
 
 ```powershell
-python experiments/train_tiny_transformer.py --variant tree --task-family multirecord --context 16384 --local-window 256 --block-size 256 --top-blocks 4 --retrieval-pages 4 --tree-fanout 16 --tree-beam 4 --retrieval-unit page --top-tokens 1 --batch-size 1 --steps 1200 --eval-batches 256 --d-model 64 --layers 2 --heads 4 --learning-rate 0.0005 --router-loss-weight 1 --historical-store bf16 --checkpoint results/transformer_tree_page_16k.pt --output results/transformer_tree_page_16k.json
+python experiments/train_tiny_transformer.py --variant tree --task-family multirecord --context 16384 --local-window 64 --block-size 64 --top-blocks 1 --retrieval-pages 1 --tree-fanout 16 --tree-beam 4 --retrieval-unit page_fine --retrieval-width 4 --top-tokens 1 --batch-size 1 --steps 2400 --eval-batches 256 --d-model 64 --layers 2 --heads 4 --learning-rate 0.0003 --router-loss-weight 1 --historical-store bf16 --gradient-checkpointing --freeze-base-model --init-checkpoint results/transformer_learned_pagefine1_2layer_16k.pt --checkpoint results/transformer_tree_pagefine1_2layer_16k.pt --output results/transformer_tree_pagefine1_2layer_16k.json
 ```
 
 Benchmark router-inclusive controls.  `tree_initial_build_ms` is reported
