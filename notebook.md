@@ -890,9 +890,9 @@ The page-fine solution survives depth expansion, and the two-layer fused
 decoder preserves model quality while reducing routed decode latency by about
 193× relative to full PyTorch rerouting. The 24 GB RTX 4090 was sufficient
 for this 16K inference benchmark after disabling autograd in the benchmark's
-full-PyTorch control. Scaling two-layer *training* to 32K will require more
-memory because the current training implementation still materializes full
-attention matrices.
+full-PyTorch control. At the time of this measurement, scaling two-layer
+*training* to 32K required more memory because the learned path still
+materialized full attention matrices.
 
 ## E27 — 32K two-layer page-fine scale test
 

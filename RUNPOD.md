@@ -56,9 +56,9 @@ tmux new -s cascade32k
 bash scripts/runpod_32k_2layer_pagefine.sh 2>&1 | tee results/runpod_32k_2layer_pagefine.log
 ```
 
-Use at least 48 GB VRAM; 80 GB is preferred. The current quality-training
-implementation still materializes full attention matrices, even though the
-decode benchmark uses fused sparse page-fine attention.
+Use at least 48 GB VRAM; 80 GB is preferred. Learned/local training now uses
+an exact windowed attention path, but dense baselines and teacher-attention
+capture still materialize full attention matrices.
 
 If the first 32K run has perfect router recall but incomplete answer quality,
 run one matched 1,200-update continuation before changing the architecture:

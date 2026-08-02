@@ -146,6 +146,56 @@ class CausalAttention(nn.Module):
         batch_size, length, channels = x.shape
         qkv = self.qkv(x).view(batch_size, length, 3, self.heads, self.head_dim).permute(2, 0, 3, 1, 4)
         query, key, value = qkv[0], qkv[1], qkv[2]
+
+        # Teacher-attention capture needs the full final-query distribution.
+        # Keep the dense reference path for it and for the dense baseline.
+        if variant != "dense" and not capture_attention:
+            if local_window <= 0:
+                raise ValueError("local_window must be positive")
+            window = min(local_window, length)
+            padded_key = F.pad(key, (0, 0, window - 1, 0))
+            padded_value = F.pad(value, (0, 0, window - 1, 0))
+            key_windows = padded_key.unfold(2, window, 1).permute(0, 1, 2, 4, 3)
+            value_windows = padded_value.unfold(2, window, 1).permute(0, 1, 2, 4, 3)
+            window_scores = torch.einsum("bhld,bhlwd->bhlw", query, key_windows) / math.sqrt(self.head_dim)
+            relative = torch.arange(window, device=x.device) - window + 1
+            valid = torch.arange(length, device=x.device).unsqueeze(1) + relative.unsqueeze(0) >= 0
+            window_attention = self.dropout(window_scores.masked_fill(~valid.unsqueeze(0).unsqueeze(0), float("-inf")).softmax(dim=-1))
+            output = torch.einsum("bhlw,bhlwd->bhld", window_attention, value_windows)
+
+            # Only the final query receives exact historical candidates. They
+            # are deliberately outside the hot local window in all retrieval
+            # tasks, so concatenation preserves the reference mask exactly.
+            if variant == "oracle":
+                if evidence_positions is None:
+                    raise ValueError("oracle attention needs evidence positions")
+                evidence = evidence_positions.unsqueeze(1) if evidence_positions.ndim == 1 else evidence_positions
+                offsets = torch.arange(3, device=x.device)
+                extra_indices = (evidence.unsqueeze(-1) + offsets).flatten(start_dim=1)
+            elif variant == "learned":
+                if retrieved_indices is None:
+                    raise ValueError("learned attention needs retrieved indices")
+                extra_indices = retrieved_indices
+            else:
+                extra_indices = None
+
+            if extra_indices is not None:
+                gather = extra_indices[:, None, :, None].expand(-1, self.heads, -1, self.head_dim)
+                extra_key = key.gather(2, gather)
+                extra_value = value.gather(2, gather)
+                final_query = query[:, :, -1]
+                local_key = key[:, :, length - window :]
+                local_value = value[:, :, length - window :]
+                local_scores = torch.einsum("bhd,bhwd->bhw", final_query, local_key)
+                extra_scores = torch.einsum("bhd,bhed->bhe", final_query, extra_key)
+                final_attention = self.dropout(
+                    torch.cat((local_scores, extra_scores), dim=-1).div(math.sqrt(self.head_dim)).softmax(dim=-1)
+                )
+                final_value = torch.cat((local_value, extra_value), dim=2)
+                output = output.clone()
+                output[:, :, -1] = torch.einsum("bhw,bhwd->bhd", final_attention, final_value)
+            return self.output(output.transpose(1, 2).contiguous().view(batch_size, length, channels)), None
+
         scores = (query @ key.transpose(-2, -1)) / math.sqrt(self.head_dim)
         positions = torch.arange(length, device=x.device)
         causal = positions[:, None] >= positions[None, :]
