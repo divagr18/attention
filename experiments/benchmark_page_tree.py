@@ -140,6 +140,28 @@ def main() -> None:
         return exact_attention(query, selected_keys, selected_values)
 
     search = lambda: tree.search(router_query, beam=config.tree_beam, retrieval_pages=config.retrieval_pages)
+    triton_results: dict[str, dict[str, float]] = {}
+    if device.type == "cuda" and config.tree_beam == config.retrieval_pages == 1 and len(tree.levels) == 4:
+        from triton_tree_router import tree_route_3level
+
+        route_args = (
+            router_query.contiguous(),
+            tree.levels[0].contiguous(), tree.levels[1].contiguous(), tree.levels[2].contiguous(),
+            tree.valid_levels[0].contiguous(), tree.valid_levels[1].contiguous(), tree.valid_levels[2].contiguous(),
+        )
+        reference_pages = tree.search(router_query, beam=1, retrieval_pages=1).page_indices
+        fused_pages = tree_route_3level(*route_args).unsqueeze(1)
+        torch.testing.assert_close(fused_pages, reference_pages)
+
+        def triton_tree_path() -> torch.Tensor:
+            pages = tree_route_3level(*route_args).unsqueeze(1)
+            selected_keys, selected_values = gather_pages(keys, values, pages, config.hot_window, config.page_size)
+            return exact_attention(query, selected_keys, selected_values)
+
+        triton_results = {
+            "triton_tree_search_only": timed(lambda: tree_route_3level(*route_args), config, device),
+            "triton_tree_router_gather_attention": timed(triton_tree_path, config, device),
+        }
     report = {
         "config": asdict(config),
         "timings": {
@@ -150,6 +172,7 @@ def main() -> None:
             "tree_router_gather_attention": timed(tree_path, config, device),
             "tree_initial_build_ms": tree_build_ms,
             "tree_causal_append_build_ms": causal_build_ms,
+            **triton_results,
         },
         "candidate_tokens": {
             "local": config.hot_window,
