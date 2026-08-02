@@ -227,6 +227,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=16)
     parser.add_argument("--episodes", type=int, default=8)
+    parser.add_argument("--uniform-slots", action="store_true", help="Cycle query slots uniformly (each record equally often) instead of the irregular change schedule.")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     model, config = load_model(args.checkpoint)
@@ -240,11 +241,14 @@ def main() -> None:
     else:
         prefill_ms = elapsed(lambda: prefill_two_layer_cache(model, config, base), 20)
         layer_caches = prefill_two_layer_cache(model, config, base)
-    slots, current = [], 0
-    for step in range(args.steps):
-        if step in {3, 7, 12}:
-            current = (current + 1) % 4
-        slots.append(current)
+    if args.uniform_slots:
+        slots = [step % 4 for step in range(args.steps)]
+    else:
+        slots, current = [], 0
+        for step in range(args.steps):
+            if step in {3, 7, 12}:
+                current = (current + 1) % 4
+            slots.append(current)
     # Compile and warm the fused kernel before recording decode timings.
     warm_tokens, _ = query_tokens(base, keys, values, slots[0])
     _, warm_routing, _ = model(warm_tokens, variant="learned", local_window=config.local_window, evidence_positions=None, block_size=config.block_size, top_blocks=config.top_blocks, top_tokens=config.top_tokens)
@@ -261,6 +265,8 @@ def main() -> None:
     torch.cuda.synchronize()
     exact_correct = page_correct = total = reroute_calls = adaptive_calls = 0
     page_times, reroute_times, adaptive_times = [], [], []
+    slot_exact: dict[int, list[int]] = {}
+    slot_page: dict[int, list[int]] = {}
     for _ in range(args.episodes):
         promoted = promoted_state = None
         for slot in slots:
@@ -283,6 +289,12 @@ def main() -> None:
             torch.cuda.synchronize()
             page_times.append((time.perf_counter() - start) * 1000)
             page_correct += int(page_prediction.eq(targets).sum())
+            slot_entry = slot_exact.setdefault(slot, [0, 0])
+            slot_entry[0] += int(exact_prediction.eq(targets).sum())
+            slot_entry[1] += 1
+            page_entry = slot_page.setdefault(slot, [0, 0])
+            page_entry[0] += int(page_prediction.eq(targets).sum())
+            page_entry[1] += 1
             reroute_calls += 1
             state = model.router.query(model.token_embedding(tokens[:, -3:]).mean(dim=1))
             if promoted is None or bool(1.0 - torch.nn.functional.cosine_similarity(state, promoted_state).mean() > 0.05):
@@ -303,6 +315,16 @@ def main() -> None:
         "retrieval_unit": config.retrieval_unit,
         "top_tokens": config.top_tokens,
         "retrieval_width": config.retrieval_width,
+        "uniform_slots": args.uniform_slots,
+        "slot_schedule": slots,
+        "per_slot": {
+            str(slot): {
+                "exact_accuracy": slot_exact[slot][0] / slot_exact[slot][1],
+                "triton_accuracy": slot_page[slot][0] / slot_page[slot][1],
+                "count": slot_exact[slot][1],
+            }
+            for slot in sorted(slot_exact)
+        },
         "prefill_kv_cache_ms": prefill_ms,
         "steps_per_episode": args.steps,
         "exact_router_model_accuracy": exact_correct / total,

@@ -190,7 +190,10 @@ def span_gather_decode_attention_kernel(
         span_offsets = offsets - local_window
         center_ids = span_offsets // span_width
         centers = tl.load(centers_ptr + batch * top_tokens + center_ids, mask=(~local) & (offsets < candidates), other=0)
-        token_indices = tl.where(local, historical + offsets, centers + span_offsets % span_width)
+        # Clamp span tails to the last historical token to match the training-time
+        # router contract; unclamped centers near the boundary would read query-tail K/V.
+        span_indices = tl.minimum(centers + span_offsets % span_width, historical - 1)
+        token_indices = tl.where(local, historical + offsets, span_indices)
         mask = (offsets[:, None] < candidates) & (dims[None, :] < head_dim)
         base = (program * context + token_indices[:, None]) * head_dim + dims[None, :]
         keys = tl.load(key_ptr + base, mask=mask, other=0.0).to(tl.float32)

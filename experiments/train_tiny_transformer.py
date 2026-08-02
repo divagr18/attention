@@ -74,9 +74,10 @@ class Config:
     tree_summary: str = "pooled"
     tree_slots: int = 4
     tree_leaf_slots: int = 1
+    distance_sampling: bool = False
 
 
-def make_batch(config: Config, device: torch.device, generator: torch.Generator) -> tuple[Tensor, Tensor, Tensor]:
+def make_batch(config: Config, device: torch.device, generator: torch.Generator, force_chosen: int | None = None) -> tuple[Tensor, Tensor, Tensor]:
     """Return input tokens, answer targets, and labelled evidence positions."""
     if config.context <= config.local_window + 8:
         raise ValueError("context must exceed local_window by at least eight tokens")
@@ -118,10 +119,28 @@ def make_batch(config: Config, device: torch.device, generator: torch.Generator)
         if family == "multirecord":
             # Four independent records emulate a persistent context with
             # multiple possible promoted pages.  The query chooses one.
-            record_positions = torch.linspace(4, historical_length - 4, 4, device=device).round().long()
+            if config.distance_sampling:
+                # Stratified sampling: one record per position quartile, position
+                # uniform within the stratum.  Evidence distance becomes a
+                # continuous variable so accuracy can be scored by distance decile
+                # instead of only at the four fixed linspace positions.
+                quarter = historical_length // 4
+                bounds = (
+                    (4, quarter - 4),
+                    (quarter, 2 * quarter - 4),
+                    (2 * quarter, 3 * quarter - 4),
+                    (3 * quarter, historical_length - 4),
+                )
+                record_positions = torch.tensor(
+                    [int(torch.randint(low, high, (1,), generator=generator, device=device)) for low, high in bounds],
+                    device=device,
+                    dtype=torch.long,
+                )
+            else:
+                record_positions = torch.linspace(4, historical_length - 4, 4, device=device).round().long()
             record_keys = torch.randperm(KEY_COUNT, generator=generator, device=device)[:4] + KEY_START
             record_values = torch.randint(VALUE_START, VALUE_START + KEY_COUNT, (4,), generator=generator, device=device)
-            chosen = int(torch.randint(0, 4, (1,), generator=generator, device=device))
+            chosen = force_chosen if force_chosen is not None else int(torch.randint(0, 4, (1,), generator=generator, device=device))
             for record_position, record_key, record_value in zip(record_positions.tolist(), record_keys.tolist(), record_values.tolist()):
                 tokens[row, record_position : record_position + 3] = torch.tensor([record_key, SEPARATOR_TOKEN, record_value], device=device)
             positions[row] = record_positions[chosen]
@@ -475,6 +494,7 @@ def evaluate(model: TinyRetrievalTransformer, config: Config, device: torch.devi
     router_all_token_hits = 0
     router_all_block_hits = 0
     by_bucket: dict[str, list[int]] = {"near": [0, 0], "medium": [0, 0], "far": [0, 0]}
+    by_decile: dict[int, list[int]] = {decile: [0, 0] for decile in range(10)}
     for _ in range(config.eval_batches):
         tokens, targets, evidence_positions = make_batch(config, device, generator)
         logits, routing, _ = model(tokens, variant=config.variant, local_window=config.local_window, evidence_positions=evidence_positions, block_size=config.block_size, top_blocks=config.top_blocks, top_tokens=config.top_tokens)
@@ -498,10 +518,17 @@ def evaluate(model: TinyRetrievalTransformer, config: Config, device: torch.devi
         for name, mask in (("near", distances < config.context // 3), ("medium", (distances >= config.context // 3) & (distances < 2 * config.context // 3)), ("far", distances >= 2 * config.context // 3)):
             by_bucket[name][0] += int(matches[mask].sum())
             by_bucket[name][1] += int(mask.sum())
+        deciles = (distances * 10 // config.context).clamp(0, 9)
+        for decile in range(10):
+            decile_mask = deciles.eq(decile)
+            by_decile[decile][0] += int(matches[decile_mask].sum())
+            by_decile[decile][1] += int(decile_mask.sum())
         correct += int(matches.sum())
         total += config.batch_size
     metrics = {"accuracy": correct / total}
     metrics.update({f"accuracy_{name}": successes / count if count else 0.0 for name, (successes, count) in by_bucket.items()})
+    metrics.update({f"accuracy_decile_{decile}": successes / count if count else 0.0 for decile, (successes, count) in by_decile.items()})
+    metrics.update({f"count_decile_{decile}": count for decile, (successes, count) in by_decile.items()})
     if config.variant in ("learned", "flat", "tree"):
         metrics["router_token_recall"] = router_token_hits / total
         metrics["router_block_recall"] = router_block_hits / total
@@ -529,6 +556,7 @@ def main() -> None:
     parser.add_argument("--retrieval-unit", choices=("span", "page", "page_fine"), default="span")
     parser.add_argument("--retrieval-width", type=int, default=3, help="Promoted token count for span retrieval.")
     parser.add_argument("--task-family", choices=("single", "overwrite", "distractor", "mixed", "multirecord", "dual", "dual_parity"), default="single")
+    parser.add_argument("--distance-sampling", action="store_true", help="Multirecord diagnostic: sample record positions per distance stratum so accuracy can be scored by distance decile. Default keeps the fixed linspace positions.")
     parser.add_argument("--query-width", type=int, default=3)
     parser.add_argument("--router-index", choices=("flat", "tree"), default="flat")
     parser.add_argument("--tree-fanout", type=int, default=16)
