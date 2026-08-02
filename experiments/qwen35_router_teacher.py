@@ -29,6 +29,7 @@ def install_teacher_capture() -> None:
     eager_fn = ALL_ATTENTION_FUNCTIONS["eager"]
 
     def teacher_capture_forward(module, query, key, value, attention_mask=None, **kwargs):
+        kwargs["output_attentions"] = True
         attn_output, attn_weights = eager_fn(module, query, key, value, attention_mask=attention_mask, **kwargs)
         layer_idx = getattr(module, "layer_idx", None)
         if layer_idx is not None:
