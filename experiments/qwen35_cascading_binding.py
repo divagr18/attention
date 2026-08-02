@@ -20,30 +20,31 @@ import torch
 
 from cascading_kv_attention import CascadingAttentionConfig, CascadingKVAttention
 
-_CORES: dict[tuple[int, str], CascadingKVAttention] = {}
-
-
-def _core(head_dim: int, device: torch.device, config: CascadingAttentionConfig) -> CascadingKVAttention:
-    key = (head_dim, str(device))
-    if key not in _CORES:
-        _CORES[key] = CascadingKVAttention(head_dim, config).to(device).eval()
-    return _CORES[key]
-
-
 def make_cascading_attention(config: CascadingAttentionConfig):
     """Build a transformers-compatible attention fn backed by the cascading core."""
+    core_holder: dict[str, CascadingKVAttention] = {}
 
     def cascading_attention_forward(module, query, key, value, attention_mask=None, dropout=0.0, scaling=None, **kwargs):
         if query.size(2) != 1:
             raise NotImplementedError("cascading binding is decode-only (S==1) in v1; prefill needs causal masking")
+        if "core" not in core_holder:
+            core_holder["core"] = CascadingKVAttention(query.size(-1), config).to(query.device).eval()
+        core = core_holder["core"]
         heads = query.size(1)
         kv_heads = key.size(1)
         if heads != kv_heads:
             groups = heads // kv_heads
             key = key.repeat_interleave(groups, dim=1)
             value = value.repeat_interleave(groups, dim=1)
-        core = _core(query.size(-1), query.device, config)
-        output, _ = core(query[:, :, 0, :].contiguous(), key.contiguous(), value.contiguous(), tree=None)
+        length = key.size(2)
+        page_count = max(0, (length - config.hot_window) // config.page_size)
+        tree = None
+        if page_count:
+            # Head-collapsed page summaries drive routing; the core gathers exact K/V.
+            paged = page_count * config.page_size
+            page_keys = key[:, :, :paged].view(key.size(0), heads, page_count, config.page_size, key.size(-1)).mean(dim=(1, 3))
+            tree = core.make_tree(page_keys)
+        output, _ = core(query[:, :, 0, :].contiguous(), key.contiguous(), value.contiguous(), tree=tree)
         return output.unsqueeze(2).transpose(1, 2).contiguous(), None
 
     return cascading_attention_forward
@@ -67,40 +68,56 @@ def _load(model: str):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="Qwen/Qwen3.5-4B")
-    parser.add_argument("--prefix-tokens", type=int, default=8)
+    parser.add_argument("--prefix-tokens", type=int, default=8, help="Gate 1 prefix length (below hot-window so page_count=0).")
+    parser.add_argument("--hot-window", type=int, default=512)
+    parser.add_argument("--page-size", type=int, default=128)
+    parser.add_argument("--retrieval-pages", type=int, default=4)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
-    core_config = CascadingAttentionConfig()
+    core_config = CascadingAttentionConfig(
+        hot_window=args.hot_window,
+        page_size=args.page_size,
+        retrieval_pages=args.retrieval_pages,
+        tree_beam=args.retrieval_pages,
+    )
     register_cascading_attention(core_config)
     model = _load(args.model)
     vocab = getattr(model.config, "vocab_size", None) or model.config.text_config.vocab_size
-    input_ids = torch.randint(0, vocab, (1, args.prefix_tokens), device="cuda")
-    next_id = torch.randint(0, vocab, (1, 1), device="cuda")
 
-    model.config._attn_implementation = "eager"
-    eager_cache = model(input_ids, use_cache=True).past_key_values
-    reference = model(next_id, past_key_values=eager_cache).logits[:, -1, :]
+    def decode_parity(prefix_len: int) -> float:
+        input_ids = torch.randint(0, vocab, (1, prefix_len), device="cuda")
+        next_id = torch.randint(0, vocab, (1, 1), device="cuda")
+        model.config._attn_implementation = "eager"
+        eager_cache = model(input_ids, use_cache=True).past_key_values
+        reference = model(next_id, past_key_values=eager_cache).logits[:, -1, :]
+        cascading_cache = model(input_ids, use_cache=True).past_key_values
+        model.config._attn_implementation = "cascading"
+        test = model(next_id, past_key_values=cascading_cache).logits[:, -1, :]
+        model.config._attn_implementation = "eager"
+        return (reference - test).abs().max().item()
 
-    cascading_cache = model(input_ids, use_cache=True).past_key_values
-    model.config._attn_implementation = "cascading"
-    test = model(next_id, past_key_values=cascading_cache).logits[:, -1, :]
-    model.config._attn_implementation = "eager"
-
-    max_error = (reference - test).abs().max().item()
+    gate1_error = decode_parity(args.prefix_tokens)
+    gate2_prefix = args.hot_window + args.retrieval_pages * args.page_size
+    gate2_error = decode_parity(gate2_prefix)
     report = {
         "model": args.model,
-        "prefix_tokens": args.prefix_tokens,
-        "decode_parity_max_abs_error": max_error,
-        "parity": max_error < 1e-3,
+        "hot_window": args.hot_window,
+        "page_size": args.page_size,
+        "retrieval_pages": args.retrieval_pages,
+        "gate1_prefix_tokens": args.prefix_tokens,
+        "gate1_max_abs_error": gate1_error,
+        "gate2_prefix_tokens": gate2_prefix,
+        "gate2_max_abs_error": gate2_error,
+        "parity": gate1_error < 1e-3 and gate2_error < 1e-3,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     if not report["parity"]:
-        raise SystemExit(f"decode parity FAILED: max abs error {max_error:.3e}")
+        raise SystemExit(f"decode parity FAILED: gate1={gate1_error:.3e} gate2={gate2_error:.3e}")
 
 
 if __name__ == "__main__":
