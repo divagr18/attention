@@ -44,3 +44,18 @@ because direct full-page training failed at 4K.
 For a fair 16K curriculum control, `scripts/runpod_16k_direct_page_control.sh`
 starts from the same 3-token span checkpoint as the staged curriculum and
 uses the identical 4,800 training updates under full-page exposure.
+
+## Next scale: 32K two-layer page-fine model
+
+The validated 16K configuration uses one four-token fine span from each
+routed 64-token page. To test the next context-length scale, first archive
+and retain `transformer_learned_pagefine1_2layer_16k.pt`, then run:
+
+```bash
+tmux new -s cascade32k
+bash scripts/runpod_32k_2layer_pagefine.sh 2>&1 | tee results/runpod_32k_2layer_pagefine.log
+```
+
+Use at least 48 GB VRAM; 80 GB is preferred. The current quality-training
+implementation still materializes full attention matrices, even though the
+decode benchmark uses fused sparse page-fine attention.
