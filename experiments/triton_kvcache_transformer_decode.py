@@ -26,7 +26,13 @@ def load_model(path: Path) -> tuple[TinyRetrievalTransformer, Config]:
     config = Config(**checkpoint["config"])
     config.device = "cuda"
     model = TinyRetrievalTransformer(config).cuda().eval()
-    model.load_state_dict(checkpoint["model_state"])
+    # Pre-tree checkpoints lack the tree-only summary weights; flat routing never
+    # uses them, so tolerate exactly those and reject any other mismatch.
+    load_result = model.load_state_dict(checkpoint["model_state"], strict=False)
+    tree_only = {"router.page_summary.weight", "router.internal_summary.weight"}
+    real_missing = set(load_result.missing_keys) - tree_only
+    if real_missing or load_result.unexpected_keys:
+        raise RuntimeError(f"checkpoint mismatch: missing={sorted(real_missing)} unexpected={sorted(load_result.unexpected_keys)}")
     return model, config
 
 
