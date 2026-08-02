@@ -221,6 +221,7 @@ def elapsed(operation, iterations: int) -> float:
     return (time.perf_counter() - start) * 1000 / iterations
 
 
+@torch.no_grad()
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
