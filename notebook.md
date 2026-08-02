@@ -893,3 +893,37 @@ for this 16K inference benchmark after disabling autograd in the benchmark's
 full-PyTorch control. Scaling two-layer *training* to 32K will require more
 memory because the current training implementation still materializes full
 attention matrices.
+
+## E27 — 32K two-layer page-fine scale test
+
+### Setup
+
+The selected two-layer 16K page-fine model (one 64-token routed page, one
+four-token exact span) was position-interpolated and trained for 1,200 updates
+at 32,768 tokens. The model retained the same one-center router budget and
+was evaluated through both full PyTorch routing and the two-layer fused
+K/V-cache decoder.
+
+### Result
+
+| Metric | Result |
+|---|---:|
+| Held-out answer accuracy | 82.42% |
+| Near / medium / far accuracy | 88.46% / 53.95% / 96.88% |
+| Router block/token recall | 100.0% |
+| Two-layer K/V prefill | 138.69 ms |
+| Full PyTorch reroute | 277.51 ms |
+| Fused Triton page-fine decode | 0.748 ms |
+| Adaptive fused decode | 0.538 ms |
+| Exact model / Triton decode accuracy | 68.75% / 68.75% |
+
+### Interpretation
+
+The fused two-layer decoder remains correct: it exactly preserves the
+full-model decode-loop accuracy while reducing rerouted decode latency by
+about 371×. The quality gate is not yet met at 32K, however. Perfect router
+recall rules out selection failure; the remaining issue is the model's use of
+the retrieved span after direct 16K-to-32K position interpolation. The next
+controlled test is a further 1,200-update continuation at the same 32K
+configuration. If medium-distance quality remains poor, test an intermediate
+context-length bridge rather than scaling the retrieval budget.
