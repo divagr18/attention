@@ -797,3 +797,99 @@ promote a three-token record span, while the kernel exposes an entire
 64-token page; the extra candidates change attention normalization enough to
 destroy answer quality. The next change must train full-page promotion
 directly, or implement a fused selected-record-span gather kernel.
+
+## E24 — 16K matched-compute full-page control
+
+### Purpose
+
+Test whether progressive span-to-page widening fixes the quality failure of
+direct full-page promotion at 16K. Both conditions begin from the same weak
+16K three-token-span checkpoint and receive 4,800 further updates.
+
+### Result
+
+| Condition | Answer accuracy | Near | Medium | Far | Triton decode | PyTorch reroute |
+|---|---:|---:|---:|---:|---:|---:|
+| Direct 64-token page, 4,800 updates | 76.56% | 98.31% | 3.28% | 100.0% | 0.290 ms | 57.11 ms |
+| Span 8 → 16 → 32 → 64-token page, 1,200 updates/stage | 70.70% | 100.0% | 1.32% | 100.0% | 0.311 ms | 56.83 ms |
+
+In both decode-loop integrations, the Triton result exactly matched the
+corresponding full PyTorch routed model at 68.75% accuracy. Router block and
+token recall were 100% in every training evaluation.
+
+### Interpretation
+
+The full-page failure is not a routing failure and is not repaired by the
+matched-compute widening curriculum at 16K. The strong near/far results and
+near-zero medium accuracy expose a positional/candidate-normalization
+failure: the correct page is found, but adding irrelevant page tokens changes
+how the model uses that page. The fused page kernel remains correct and fast;
+candidate granularity is the quality bottleneck.
+
+## E25 — 16K page-fine selector budget frontier
+
+### Purpose
+
+Retain page-level routing while promoting only short exact spans from inside
+the selected 64-token page. Each condition starts from the perfect 32-token
+span curriculum checkpoint, uses four-token promoted spans, and varies the
+number of within-page centers.
+
+### Result
+
+| Fine centers/page | Answer accuracy | Near | Medium | Far | Triton decode | Adaptive Triton decode |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 100.0% | 100.0% | 100.0% | 100.0% | 0.278 ms | 0.273 ms |
+| 2 | 100.0% | 100.0% | 100.0% | 100.0% | 0.300 ms | 0.288 ms |
+| 4 | 100.0% | 100.0% | 100.0% | 100.0% | 0.288 ms | 0.282 ms |
+| 8 | 100.0% | 100.0% | 100.0% | 100.0% | 0.285 ms | 0.279 ms |
+| 16 | 100.0% | 100.0% | 100.0% | 100.0% | 0.333 ms | 0.292 ms |
+
+The Triton path matched the full routed model at 100% for every budget.
+
+### Interpretation
+
+One four-token span from the routed page is sufficient on this task. It is
+also the smallest and fastest measured configuration, so later experiments
+use `page_fine`, one within-page center, and retrieval width four. This
+isolates the full-page collapse to unnecessary page candidates rather than
+the coarse page-routing representation.
+
+## E26 — Two-layer 16K page-fine K/V-cache integration
+
+### Purpose
+
+Verify that the selected page-fine configuration remains accurate in a deeper
+Transformer, then extend the fused K/V-cache decode path from one layer to
+two layers.
+
+### Setup
+
+A two-layer 16K model was initialized from the one-layer page-fine,
+one-center checkpoint and trained for 1,200 updates with activation
+checkpointing. The decoder prefilled layer-one and layer-two K/V caches.
+During decode, it recomputed the three-token query tail, used local attention
+for the first two tail tokens, and used fused fine-span attention for the
+final query in both layers.
+
+### Result
+
+| Metric | Result |
+|---|---:|
+| Held-out answer accuracy | 100.0% |
+| Router block/token recall | 100.0% |
+| Two-layer K/V prefill | 56.44 ms |
+| Full PyTorch reroute | 113.05 ms |
+| Fused Triton page-fine decode | 0.585 ms |
+| Adaptive fused decode | 0.554 ms |
+| Exact model / Triton decode accuracy | 100.0% / 100.0% |
+
+### Interpretation
+
+The page-fine solution survives depth expansion, and the two-layer fused
+decoder preserves model quality while reducing routed decode latency by about
+193× relative to full PyTorch rerouting. The 24 GB RTX 4090 was sufficient
+for this 16K inference benchmark after disabling autograd in the benchmark's
+full-PyTorch control. Scaling two-layer *training* to 32K will require more
+memory because the current training implementation still materializes full
+attention matrices.
