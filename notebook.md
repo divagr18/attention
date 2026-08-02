@@ -994,6 +994,18 @@ trains only the new page-summary and internal-summary projections. End-to-end
 adaptation is deferred until the frozen tree router reaches the flat control's
 recall.
 
+### Multi-vector correction
+
+The pooled-summary warm-up reached only 15.6% recall despite the frozen flat
+control retaining 100%. The tree therefore now stores four routing slots per
+page and node. For this synthetic grammar, leaf slots are the existing trained
+record-key projections at structurally identifiable key positions; empty slots
+are masked, and internal nodes preserve up to four nonempty child slots. This
+is a controlled index-feasibility result, not a claim that structural-token
+selection solves semantic retrieval in natural language. The next gate is
+exact parity with the converged flat page-fine checkpoint, followed by learned
+slot pooling and dense-teacher supervision.
+
 ### Next measurement
 
 Run the tree control at 16K through 128K with an 8,192-token hot window and

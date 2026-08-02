@@ -17,8 +17,9 @@ fi
   --variant tree --task-family multirecord \
   --context 16384 --local-window 64 --block-size 64 \
   --top-blocks 1 --retrieval-pages 1 --tree-fanout 16 --tree-beam 4 \
+  --tree-summary structural_slots --tree-slots 4 \
   --retrieval-unit page_fine --retrieval-width 4 --top-tokens 1 --historical-store bf16 \
-  --batch-size 1 --steps 2400 --eval-batches 256 \
+  --batch-size 1 --steps 0 --eval-batches 256 \
   --d-model 64 --layers 2 --heads 4 --learning-rate 0.0003 \
   --router-loss-weight 1.0 --gradient-checkpointing --freeze-base-model \
   --init-checkpoint "${BASE}" \
@@ -26,7 +27,7 @@ fi
   --output results/transformer_tree_pagefine1_2layer_16k.json
 
 "${PYTHON_BIN}" experiments/benchmark_page_tree.py \
-  --context 16384 --hot-window 8192 --page-size 256 \
+  --context 131072 --hot-window 8192 --page-size 256 \
   --tree-fanout 16 --tree-beam 4 --retrieval-pages 4 \
   --heads 4 --head-dim 16 \
-  --output results/page_tree_16k.json
+  --output results/page_tree_128k.json

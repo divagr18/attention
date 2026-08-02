@@ -7,6 +7,7 @@ import torch
 
 from hierarchical_page_tree import HierarchicalPageTree
 from cascading_kv_attention import CascadingAttentionConfig, CascadingKVAttention
+from multi_vector_page_tree import MultiVectorPageTree
 from train_tiny_transformer import CausalAttention, HierarchicalRouter
 
 
@@ -27,6 +28,14 @@ def main() -> None:
     result = causal.search(torch.randn(1, 16), beam=4, retrieval_pages=4)
     assert result.page_indices.shape == (1, 4)
     assert result.score_count <= 4 * 4 * max(1, result.depth)
+
+    slots = torch.zeros(1, 32, 4, 32)
+    record_pages = torch.tensor([2, 10, 23, 31])
+    slots[0, record_pages, 0, record_pages] = 1
+    multi = MultiVectorPageTree.from_page_slots(slots, fanout=4)
+    multi_found = multi.search(torch.nn.functional.one_hot(torch.tensor([23]), 32).float(), beam=4, retrieval_pages=1)
+    assert multi_found.page_indices.item() == 23
+    assert multi_found.score_count < 32 * 4
 
     # The gathered tree candidates must use the same unified softmax as the
     # masked reference over precisely that candidate set.

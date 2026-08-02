@@ -27,6 +27,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from hierarchical_page_tree import HierarchicalPageTree
+from multi_vector_page_tree import MultiVectorPageTree
 
 
 KEY_COUNT = 64
@@ -70,6 +71,8 @@ class Config:
     retrieval_pages: int = 0  # zero inherits --top-blocks for compatibility
     historical_store: str = "bf16"
     freeze_base_model: bool = False
+    tree_summary: str = "pooled"
+    tree_slots: int = 4
 
 
 def make_batch(config: Config, device: torch.device, generator: torch.Generator) -> tuple[Tensor, Tensor, Tensor]:
@@ -284,6 +287,9 @@ class HierarchicalRouter(nn.Module):
         tree_fanout: int = 16,
         tree_beam: int = 4,
         retrieval_pages: int | None = None,
+        tree_summary: str = "pooled",
+        tree_slots: int = 4,
+        tokens: Tensor | None = None,
     ) -> RouterOutput:
         if historical_length % block_size:
             raise ValueError("historical length must divide evenly into block_size")
@@ -312,19 +318,40 @@ class HierarchicalRouter(nn.Module):
             if retrieval_pages > tree_beam:
                 raise ValueError("tree retrieval_pages must be no greater than tree_beam")
             page_records = record_embeddings.view(embeddings.size(0), page_count, block_size, -1)
-            page_mean = page_records.mean(dim=2)
-            page_max = page_records.amax(dim=2)
-            page_keys = self.page_summary(torch.cat((page_mean, page_max), dim=-1))
-            tree = HierarchicalPageTree.from_page_keys(
-                page_keys, fanout=tree_fanout, aggregate=self.internal_summary
-            )
-            if self.training:
-                # Training may score every stored summary to distil the path;
-                # inference never takes this exhaustive branch.
-                tree_level_scores = tuple(
+            if tree_summary == "pooled":
+                page_mean = page_records.mean(dim=2)
+                page_max = page_records.amax(dim=2)
+                page_keys = self.page_summary(torch.cat((page_mean, page_max), dim=-1))
+                tree = HierarchicalPageTree.from_page_keys(
+                    page_keys, fanout=tree_fanout, aggregate=self.internal_summary
+                )
+                all_level_scores = tuple(
                     torch.einsum("bd,bnd->bn", query, level) / math.sqrt(query.size(-1))
                     for level in tree.levels
                 )
+            elif tree_summary == "structural_slots":
+                if tokens is None:
+                    raise ValueError("structural_slots needs input tokens")
+                # The synthetic vocabulary reserves KEY_START..KEY_START+63
+                # for record keys, while random noise begins at NOISE_START.
+                # This is a structural index, not an evidence-position label.
+                record_mask = tokens[:, :historical_length].ge(KEY_START) & tokens[:, :historical_length].lt(KEY_START + KEY_COUNT)
+                slot_order = record_mask.view(embeddings.size(0), page_count, block_size).cumsum(dim=-1) - 1
+                valid_slots = record_mask.view(embeddings.size(0), page_count, block_size) & slot_order.lt(tree_slots)
+                projected = self.key(page_records)
+                page_slots = projected.new_zeros(embeddings.size(0), page_count, tree_slots, projected.size(-1))
+                slot_indices = slot_order.clamp_min(0).clamp_max(tree_slots - 1).unsqueeze(-1).expand_as(projected)
+                page_slots.scatter_add_(2, slot_indices, projected * valid_slots.unsqueeze(-1))
+                page_slot_counts = torch.zeros(embeddings.size(0), page_count, tree_slots, device=embeddings.device, dtype=torch.long)
+                page_slot_counts.scatter_add_(2, slot_order.clamp_min(0).clamp_max(tree_slots - 1), valid_slots.long())
+                tree = MultiVectorPageTree.from_page_slots(page_slots, fanout=tree_fanout, slot_valid=page_slot_counts.bool())
+                all_level_scores = tree.node_scores(query)
+            else:
+                raise ValueError(f"unknown tree summary mode: {tree_summary}")
+            if self.training:
+                # Training may score every stored summary to distil the path;
+                # inference never takes this exhaustive branch.
+                tree_level_scores = all_level_scores
                 block_scores = tree_level_scores[0]
             search = tree.search(query, beam=tree_beam, retrieval_pages=retrieval_pages)
             selected_blocks = search.page_indices
@@ -389,6 +416,8 @@ class TinyRetrievalTransformer(nn.Module):
         self.tree_fanout = config.tree_fanout
         self.tree_beam = config.tree_beam
         self.retrieval_pages = config.retrieval_pages
+        self.tree_summary = config.tree_summary
+        self.tree_slots = config.tree_slots
 
     def forward(self, tokens: Tensor, *, variant: str, local_window: int, evidence_positions: Tensor | None, block_size: int | None = None, top_blocks: int | None = None, top_tokens: int | None = None, capture_attention: bool = False, retrieved_indices_override: Tensor | None = None) -> tuple[Tensor, RouterOutput | None, Tensor | None]:
         positions = torch.arange(tokens.size(1), device=tokens.device)
@@ -412,6 +441,9 @@ class TinyRetrievalTransformer(nn.Module):
                     tree_fanout=self.tree_fanout,
                     tree_beam=self.tree_beam,
                     retrieval_pages=self.retrieval_pages,
+                    tree_summary=self.tree_summary,
+                    tree_slots=self.tree_slots,
+                    tokens=tokens,
                 )
                 retrieved_indices = routing.retrieved_indices
             else:
@@ -499,6 +531,8 @@ def main() -> None:
     parser.add_argument("--tree-beam", type=int, default=4)
     parser.add_argument("--retrieval-pages", type=int, default=0, help="Tree leaf pages; zero inherits --top-blocks.")
     parser.add_argument("--historical-store", choices=("bf16",), default="bf16")
+    parser.add_argument("--tree-summary", choices=("pooled", "structural_slots"), default="pooled")
+    parser.add_argument("--tree-slots", type=int, default=4)
     parser.add_argument(
         "--freeze-base-model",
         action="store_true",
@@ -523,6 +557,8 @@ def main() -> None:
         parser.error("context - local-window must divide evenly into block-size")
     if config.variant == "tree" and config.retrieval_pages and config.retrieval_pages > config.tree_beam:
         parser.error("--retrieval-pages must be no greater than --tree-beam")
+    if config.tree_slots < 1:
+        parser.error("--tree-slots must be positive")
     device = torch.device(config.device)
     random.seed(config.seed)
     torch.manual_seed(config.seed)
@@ -553,14 +589,16 @@ def main() -> None:
             parser.error("--freeze-base-model is only valid with --variant tree")
         for parameter in model.parameters():
             parameter.requires_grad_(False)
-        # The existing flat query/key router and Transformer remain fixed;
-        # warm-up learns only the newly introduced causal-tree summaries.
-        for parameter in (*model.router.page_summary.parameters(), *model.router.internal_summary.parameters()):
-            parameter.requires_grad_(True)
+        # The existing flat query/key router and Transformer remain fixed.
+        # Pooled summaries learn during warm-up; structural slots reuse the
+        # trained flat record-key index and therefore need no optimization.
+        if config.tree_summary == "pooled":
+            for parameter in (*model.router.page_summary.parameters(), *model.router.internal_summary.parameters()):
+                parameter.requires_grad_(True)
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    if not trainable_parameters:
+    if not trainable_parameters and config.steps:
         parser.error("no trainable parameters selected")
-    optimizer = torch.optim.AdamW(trainable_parameters, lr=config.learning_rate)
+    optimizer = torch.optim.AdamW(trainable_parameters, lr=config.learning_rate) if trainable_parameters else None
     teacher = None
     if args.teacher_checkpoint is not None:
         checkpoint = torch.load(args.teacher_checkpoint, map_location=device, weights_only=True)
@@ -618,6 +656,7 @@ def main() -> None:
                 else:
                     router_loss = router_loss + F.kl_div(F.log_softmax(routing.block_scores, dim=-1), block_target, reduction="batchmean")
                 loss = loss + args.teacher_router_loss_weight * router_loss
+        assert optimizer is not None
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
