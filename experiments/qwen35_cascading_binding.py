@@ -36,7 +36,8 @@ def make_cascading_attention(config: CascadingAttentionConfig):
         if query.size(2) != 1:
             raise NotImplementedError("cascading binding is decode-only (S==1) in v1; prefill needs causal masking")
         if "core" not in core_holder:
-            core_holder["core"] = CascadingKVAttention(query.size(-1), config).to(query.device).eval()
+            # Match the host model's dtype so the tree's summary projections agree with the K/V.
+            core_holder["core"] = CascadingKVAttention(query.size(-1), config).to(device=query.device, dtype=query.dtype).eval()
         core = core_holder["core"]
         heads = query.size(1)
         kv_heads = key.size(1)
