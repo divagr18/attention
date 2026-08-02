@@ -26,17 +26,27 @@ CAPTURED: dict[int, dict[str, torch.Tensor]] = {}
 def install_teacher_capture() -> None:
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
-    eager_fn = ALL_ATTENTION_FUNCTIONS["eager"]
-
     def teacher_capture_forward(module, query, key, value, attention_mask=None, **kwargs):
-        kwargs["output_attentions"] = True
-        attn_output, attn_weights = eager_fn(module, query, key, value, attention_mask=attention_mask, **kwargs)
+        # Standard eager attention (GQA repeat, scaled dot-product, additive mask,
+        # fp32 softmax). The module applies the output gate after this returns.
+        num_heads = query.size(1)
+        num_kv_heads = key.size(1)
+        if num_heads != num_kv_heads:
+            groups = num_heads // num_kv_heads
+            key = key.repeat_interleave(groups, dim=1)
+            value = value.repeat_interleave(groups, dim=1)
+        scaling = kwargs.get("scaling", query.size(-1) ** -0.5)
+        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scaling
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+        attn_weights = attn_weights.softmax(dim=-1, dtype=torch.float32).to(query.dtype)
+        attn_output = torch.matmul(attn_weights, value)
         layer_idx = getattr(module, "layer_idx", None)
         if layer_idx is not None:
             CAPTURED[layer_idx] = {
                 "query": query.detach().float().cpu(),
                 "key": key.detach().float().cpu(),
-                "attn_weights": attn_weights.detach().float().cpu() if attn_weights is not None else None,
+                "attn_weights": attn_weights.detach().float().cpu(),
             }
         return attn_output, attn_weights
 
