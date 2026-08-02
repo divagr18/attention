@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 
 from cascading_kv_attention import CascadingAttentionConfig
-from qwen35_cascading_binding import register_cascading_attention, set_oracle_pages
+from qwen35_cascading_binding import register_cascading_attention, set_oracle_pages, set_router_weights
 
 FILLER = "This is generic filler text that does not contain any useful information. "
 NEEDLE_TEMPLATE = "The magic number is {number}."
@@ -80,6 +80,7 @@ def main() -> None:
     parser.add_argument("--num-samples", type=int, default=4)
     parser.add_argument("--depths", type=float, nargs="+", default=[0.0, 0.25, 0.5, 0.75])
     parser.add_argument("--max-new-tokens", type=int, default=8)
+    parser.add_argument("--router-weights", type=Path, default=None, help="Trained router projections from qwen35_router_train.py.")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -95,6 +96,8 @@ def main() -> None:
         tree_beam=args.retrieval_pages,
     )
     register_cascading_attention(core_config)
+    if args.router_weights is not None:
+        set_router_weights(torch.load(args.router_weights, weights_only=True))
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForCausalLM.from_pretrained(args.model, dtype=getattr(torch, args.dtype), attn_implementation="eager").cuda().eval()
 
