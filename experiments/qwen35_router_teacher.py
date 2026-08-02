@@ -18,6 +18,7 @@ from pathlib import Path
 import torch
 
 from qwen35_niah_eval import build_niah
+from qwen35_ruler_eval import build_multi_niah
 
 FULL_ATTENTION_INTERVAL = 4  # full attention every 4th layer: indices 3,7,...,31
 CAPTURED: dict[int, dict[str, torch.Tensor]] = {}
@@ -78,6 +79,8 @@ def main() -> None:
     parser.add_argument("--page-size", type=int, default=128)
     parser.add_argument("--num-samples", type=int, default=2000)
     parser.add_argument("--max-depth", type=float, default=0.8, help="Keep needles in the paged region, outside the local window.")
+    parser.add_argument("--task", choices=("single_niah", "multi_niah"), default="single_niah", help="multi_niah distills key-discrimination among several needles.")
+    parser.add_argument("--num-needles", type=int, default=8)
     parser.add_argument("--routing-rotary-dim", type=int, default=0, help="Zero this many leading RoPE dims in routing inputs for length-invariant routing.")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output", type=Path, required=True)
@@ -100,9 +103,13 @@ def main() -> None:
     skipped = 0
     with torch.no_grad():
         for sample in range(args.num_samples):
-            number = random.randint(100, 999)
-            depth = random.uniform(0.0, args.max_depth)
-            input_ids, _, _ = build_niah(tokenizer, args.context_tokens, depth, number)
+            if args.task == "multi_niah":
+                target_idx = random.randrange(args.num_needles)
+                input_ids, _, _, _ = build_multi_niah(tokenizer, args.context_tokens, args.num_needles, target_idx)
+            else:
+                number = random.randint(100, 999)
+                depth = random.uniform(0.0, args.max_depth)
+                input_ids, _, _ = build_niah(tokenizer, args.context_tokens, depth, number)
 
             CAPTURED.clear()
             cache = model(input_ids[:, :-1], use_cache=True).past_key_values
