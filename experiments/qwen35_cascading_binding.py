@@ -76,6 +76,10 @@ def make_cascading_attention(config: CascadingAttentionConfig):
             # Mean/max page summaries drive routing; the core gathers exact K/V.
             paged = page_count * config.page_size
             page_kv = key[:, :, :paged].view(key.size(0), heads, page_count, config.page_size, key.size(-1))
+            if config.routing_rotary_dim:
+                # Drop leading RoPE dims so routing is content-based and length-invariant.
+                page_kv = page_kv.clone()
+                page_kv[..., : config.routing_rotary_dim] = 0.0
             page_keys = core.page_summary(torch.cat((page_kv.mean(dim=(1, 3)), page_kv.amax(dim=(1, 3))), dim=-1))
             tree = core.make_tree(page_keys)
             if _ORACLE_PAGES:
@@ -85,7 +89,11 @@ def make_cascading_attention(config: CascadingAttentionConfig):
             elif _FLAT_ROUTING:
                 # Flat routing: score every page and take top-k. Robust at moderate
                 # page counts, where the untrained beam tree prunes the target page.
-                search_query = core.query_proj(query[:, :, 0, :].mean(dim=1))
+                search_query = query[:, :, 0, :].mean(dim=1)
+                if config.routing_rotary_dim:
+                    search_query = search_query.clone()
+                    search_query[..., : config.routing_rotary_dim] = 0.0
+                search_query = core.query_proj(search_query)
                 flat_scores = torch.einsum("bd,bpd->bp", search_query, page_keys) / (query.size(-1) ** 0.5)
                 force_page_indices = flat_scores.topk(min(config.retrieval_pages, page_count), dim=-1).indices
         output, _ = core(query[:, :, 0, :].contiguous(), key.contiguous(), value.contiguous(), tree=tree, force_page_indices=force_page_indices)

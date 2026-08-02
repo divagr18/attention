@@ -83,6 +83,7 @@ def main() -> None:
     parser.add_argument("--depths", type=float, nargs="+", default=[0.0, 0.25, 0.5, 0.75])
     parser.add_argument("--max-new-tokens", type=int, default=8)
     parser.add_argument("--router-weights", type=Path, default=None, help="Trained router projections from qwen35_router_train.py.")
+    parser.add_argument("--routing-rotary-dim", type=int, default=0, help="Zero this many leading RoPE dims in routing (must match the trained router).")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -96,6 +97,7 @@ def main() -> None:
         page_size=args.page_size,
         retrieval_pages=args.retrieval_pages,
         tree_beam=args.retrieval_pages,
+        routing_rotary_dim=args.routing_rotary_dim,
     )
     register_cascading_attention(core_config)
     if args.router_weights is not None:

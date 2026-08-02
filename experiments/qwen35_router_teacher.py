@@ -23,7 +23,7 @@ FULL_ATTENTION_INTERVAL = 4  # full attention every 4th layer: indices 3,7,...,3
 CAPTURED: dict[int, dict[str, torch.Tensor]] = {}
 
 
-def install_teacher_capture(page_count: int, page_size: int) -> None:
+def install_teacher_capture(page_count: int, page_size: int, routing_rotary_dim: int = 0) -> None:
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
     paged = page_count * page_size
@@ -51,8 +51,15 @@ def install_teacher_capture(page_count: int, page_size: int) -> None:
                 attn = attn_weights[0, :, 0, :].mean(dim=0)
                 page_mass = attn[:paged].view(page_count, page_size).sum(dim=1)
                 paged_key = key[0, :, :paged, :].view(key.size(1), page_count, page_size, -1)
+                if routing_rotary_dim:
+                    # Drop leading RoPE dims to match the binding's content-based routing.
+                    paged_key = paged_key.clone()
+                    paged_key[..., :routing_rotary_dim] = 0.0
                 page_keys_mm = torch.cat((paged_key.mean(dim=(0, 2)), paged_key.amax(dim=(0, 2))), dim=-1)
                 query_avg = query[0, :, 0, :].mean(dim=0)
+                if routing_rotary_dim:
+                    query_avg = query_avg.clone()
+                    query_avg[..., :routing_rotary_dim] = 0.0
             CAPTURED[layer_idx] = {
                 "page_mass": page_mass.detach().float().cpu(),
                 "page_keys": page_keys_mm.detach().float().cpu(),
@@ -71,6 +78,7 @@ def main() -> None:
     parser.add_argument("--page-size", type=int, default=128)
     parser.add_argument("--num-samples", type=int, default=2000)
     parser.add_argument("--max-depth", type=float, default=0.8, help="Keep needles in the paged region, outside the local window.")
+    parser.add_argument("--routing-rotary-dim", type=int, default=0, help="Zero this many leading RoPE dims in routing inputs for length-invariant routing.")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -82,7 +90,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     bos_len = 1 if tokenizer.bos_token_id is not None else 0
     page_count = (args.context_tokens + bos_len - args.hot_window) // args.page_size
-    install_teacher_capture(page_count, args.page_size)
+    install_teacher_capture(page_count, args.page_size, args.routing_rotary_dim)
     model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16, attn_implementation="teacher_capture").cuda().eval()
     config = model.config
     num_layers = getattr(config, "num_hidden_layers", None) or config.text_config.num_hidden_layers

@@ -25,6 +25,7 @@ class CascadingAttentionConfig:
     tree_beam: int = 4
     retrieval_pages: int = 4
     historical_store: str = "bf16"
+    routing_rotary_dim: int = 0  # zero this many leading RoPE dims in routing for length-invariant content routing
 
 
 class CascadingKVAttention(nn.Module):
