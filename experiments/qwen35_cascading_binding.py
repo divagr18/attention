@@ -19,13 +19,13 @@ from pathlib import Path
 import torch
 from cascading_kv_attention import CascadingAttentionConfig, CascadingKVAttention
 
-_ORACLE_PAGE_INDEX: int | None = None
+_ORACLE_PAGES: list[int] | None = None
 
 
-def set_oracle_page(index: int | None) -> None:
-    """Force every layer to promote one page (oracle retrieval); None restores routing."""
-    global _ORACLE_PAGE_INDEX
-    _ORACLE_PAGE_INDEX = index
+def set_oracle_pages(pages: list[int] | None) -> None:
+    """Force every layer to promote these pages (oracle retrieval); None restores routing."""
+    global _ORACLE_PAGES
+    _ORACLE_PAGES = pages
 
 
 def make_cascading_attention(config: CascadingAttentionConfig):
@@ -54,8 +54,10 @@ def make_cascading_attention(config: CascadingAttentionConfig):
             page_keys = key[:, :, :paged].view(key.size(0), heads, page_count, config.page_size, key.size(-1)).mean(dim=(1, 3))
             tree = core.make_tree(page_keys)
         force_page_indices = None
-        if _ORACLE_PAGE_INDEX is not None and page_count:
-            force_page_indices = key.new_full((key.size(0), 1), _ORACLE_PAGE_INDEX, dtype=torch.long)
+        if _ORACLE_PAGES and page_count:
+            valid_pages = [page for page in _ORACLE_PAGES if 0 <= page < page_count]
+            if valid_pages:
+                force_page_indices = torch.tensor(valid_pages, device=key.device, dtype=torch.long).unsqueeze(0).expand(key.size(0), len(valid_pages))
         output, _ = core(query[:, :, 0, :].contiguous(), key.contiguous(), value.contiguous(), tree=tree, force_page_indices=force_page_indices)
         return output.unsqueeze(2).transpose(1, 2).contiguous(), None
 

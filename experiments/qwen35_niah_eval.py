@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 
 from cascading_kv_attention import CascadingAttentionConfig
-from qwen35_cascading_binding import register_cascading_attention, set_oracle_page
+from qwen35_cascading_binding import register_cascading_attention, set_oracle_pages
 
 FILLER = "This is generic filler text that does not contain any useful information. "
 NEEDLE_TEMPLATE = "The magic number is {number}."
@@ -38,7 +38,7 @@ def build_niah(tokenizer, context_tokens: int, depth_fraction: float, number: in
     context = (haystack[:insert_pos] + needle_ids + haystack[insert_pos:])[:haystack_len]
     bos = [tokenizer.bos_token_id] if tokenizer.bos_token_id is not None else []
     full = bos + context + query_ids
-    return torch.tensor([full], device="cuda"), len(bos) + insert_pos
+    return torch.tensor([full], device="cuda"), len(bos) + insert_pos, len(needle_ids)
 
 
 def first_number(text: str) -> str | None:
@@ -47,7 +47,7 @@ def first_number(text: str) -> str | None:
 
 
 @torch.no_grad()
-def generate_answer(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: int, mode: str, oracle_page: int) -> str:
+def generate_answer(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: int, mode: str, oracle_pages: list[int]) -> str:
     # Eager prefill populates the cache identically for every condition.
     model.config._attn_implementation = "eager"
     out = model(input_ids, use_cache=True)
@@ -55,7 +55,7 @@ def generate_answer(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: i
     next_token = out.logits[:, -1:, :].argmax(dim=-1)
     generated = [next_token.item()]
     model.config._attn_implementation = "eager" if mode == "dense" else "cascading"
-    set_oracle_page(oracle_page if mode == "oracle" else None)
+    set_oracle_pages(oracle_pages if mode == "oracle" else None)
     eos = tokenizer.eos_token_id
     for _ in range(max_new_tokens - 1):
         out = model(next_token, past_key_values=cache, use_cache=True)
@@ -64,7 +64,7 @@ def generate_answer(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: i
         generated.append(next_token.item())
         if next_token.item() == eos:
             break
-    set_oracle_page(None)
+    set_oracle_pages(None)
     model.config._attn_implementation = "eager"
     return tokenizer.decode(generated, skip_special_tokens=True)
 
@@ -102,10 +102,15 @@ def main() -> None:
     for depth in args.depths:
         for _ in range(args.num_samples):
             number = random.randint(100, 999)
-            input_ids, needle_position = build_niah(tokenizer, args.context_tokens, depth, number)
-            oracle_page = needle_position // args.page_size
+            input_ids, needle_position, needle_len = build_niah(tokenizer, args.context_tokens, depth, number)
+            page_count = max(0, (input_ids.size(1) - args.hot_window) // args.page_size)
+            start_page = needle_position // args.page_size
+            end_page = (needle_position + needle_len - 1) // args.page_size
+            oracle_pages = list(range(start_page, end_page + 1))
+            while len(oracle_pages) < args.retrieval_pages and oracle_pages[-1] + 1 < page_count:
+                oracle_pages.append(oracle_pages[-1] + 1)
             for mode in MODES:
-                text = generate_answer(model, tokenizer, input_ids, args.max_new_tokens, mode, oracle_page)
+                text = generate_answer(model, tokenizer, input_ids, args.max_new_tokens, mode, oracle_pages)
                 results[mode][str(depth)]["correct"] += int(first_number(text) == str(number))
                 results[mode][str(depth)]["total"] += 1
 
