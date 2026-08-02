@@ -62,9 +62,11 @@ def local_causal_prefill(query: torch.Tensor, keys: torch.Tensor, values: torch.
     batch, heads, context, head_dim = query.shape
     if not (query.is_cuda and query.is_contiguous() and keys.is_contiguous() and values.is_contiguous()):
         raise ValueError("contiguous CUDA tensors are required")
-    if keys.shape != query.shape or values.shape != query.shape or head_dim > 64:
+    if keys.shape != query.shape or values.shape != query.shape or head_dim > 256:
         raise ValueError("unsupported Q/K/V shape")
     output = torch.empty_like(query)
+    # Smaller candidate blocks keep register pressure manageable at large head_dim.
+    block_candidates = 128 if head_dim <= 64 else 32
     local_causal_prefill_kernel[(batch * heads * context,)](
         query,
         keys,
@@ -74,7 +76,7 @@ def local_causal_prefill(query: torch.Tensor, keys: torch.Tensor, values: torch.
         context=context,
         window=window,
         head_dim=head_dim,
-        block_candidates=128,
+        block_candidates=block_candidates,
         block_dim=triton.next_power_of_2(head_dim),
         num_warps=4,
     )

@@ -51,8 +51,17 @@ def make_cascading_attention(config: CascadingAttentionConfig):
     core_holder: dict[str, CascadingKVAttention] = {}
 
     def cascading_attention_forward(module, query, key, value, attention_mask=None, dropout=0.0, scaling=None, **kwargs):
+        heads = query.size(1)
+        kv_heads = key.size(1)
+        if heads != kv_heads:
+            groups = heads // kv_heads
+            key = key.repeat_interleave(groups, dim=1)
+            value = value.repeat_interleave(groups, dim=1)
         if query.size(2) != 1:
-            raise NotImplementedError("cascading binding is decode-only (S==1) in v1; prefill needs causal masking")
+            # Prefill: fused local causal-window attention (subquadratic in context).
+            from triton_local_prefill import local_causal_prefill
+            output = local_causal_prefill(query.contiguous(), key.contiguous(), value.contiguous(), config.hot_window)
+            return output.transpose(1, 2).contiguous(), None
         if "core" not in core_holder:
             # Match the host model's dtype so the tree's summary projections agree with the K/V.
             core = CascadingKVAttention(query.size(-1), config).to(device=query.device, dtype=query.dtype).eval()
@@ -62,12 +71,6 @@ def make_cascading_attention(config: CascadingAttentionConfig):
                     core.query_proj.weight.copy_(_ROUTER_WEIGHTS["query_proj"].to(query.dtype))
             core_holder["core"] = core
         core = core_holder["core"]
-        heads = query.size(1)
-        kv_heads = key.size(1)
-        if heads != kv_heads:
-            groups = heads // kv_heads
-            key = key.repeat_interleave(groups, dim=1)
-            value = value.repeat_interleave(groups, dim=1)
         length = key.size(2)
         page_count = max(0, (length - config.hot_window) // config.page_size)
         tree = None
