@@ -38,7 +38,8 @@ def main() -> None:
     args = parser.parse_args()
     try:
         import torch
-        from transformers import AutoConfig, AutoModelForCausalLM
+        import transformers
+        from transformers import AutoConfig
     except ImportError as error:
         raise SystemExit("Install transformers>=5 and accelerate (requirements-qwen.txt) before running the Qwen adapter probe.") from error
 
@@ -96,15 +97,29 @@ def main() -> None:
     }
 
     dtype = getattr(torch, args.dtype)
-    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=dtype, attn_implementation=args.attn_implementation)
+    model = None
+    load_error = None
+    for loader_name in ("AutoModelForCausalLM", "AutoModelForImageTextToText", "AutoModel"):
+        loader = getattr(transformers, loader_name, None)
+        if loader is None:
+            continue
+        try:
+            model = loader.from_pretrained(args.model, torch_dtype=dtype, attn_implementation=args.attn_implementation)
+            report["loaded_via"] = loader_name
+            break
+        except Exception as error:  # noqa: BLE001 - VL wrappers reject CausalLM; try the next auto class
+            load_error = repr(error)
     attention_modules = []
-    for name, module in model.named_modules():
-        type_name = type(module).__name__
-        if "attention" in type_name.lower() and "delta" not in type_name.lower():
-            attention_modules.append({"name": name, "class": type_name, "forward": str(inspect.signature(module.forward))})
+    if model is not None:
+        for name, module in model.named_modules():
+            type_name = type(module).__name__
+            if "attention" in type_name.lower() and "delta" not in type_name.lower():
+                attention_modules.append({"name": name, "class": type_name, "forward": str(inspect.signature(module.forward))})
+    else:
+        report["load_error"] = load_error
     report["candidate_periodic_attention_modules"] = attention_modules
 
-    if args.probe_tokens and torch.cuda.is_available():
+    if model is not None and args.probe_tokens and torch.cuda.is_available():
         try:
             input_ids = torch.randint(0, report["vocab_size"] or 1000, (1, args.probe_tokens), device="cuda")
             with torch.no_grad():
