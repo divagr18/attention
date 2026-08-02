@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 
 from cascading_kv_attention import CascadingAttentionConfig
-from qwen35_cascading_binding import register_cascading_attention, set_oracle_pages, set_router_weights
+from qwen35_cascading_binding import register_cascading_attention, set_flat_routing, set_oracle_pages, set_router_weights
 
 FILLER = "This is generic filler text that does not contain any useful information. "
 NEEDLE_TEMPLATE = "The magic number is {number}."
@@ -57,6 +57,7 @@ def generate_answer(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: i
     generated = [next_token.item()]
     model.config._attn_implementation = "sdpa" if mode == "dense" else "cascading"
     set_oracle_pages(oracle_pages if mode == "oracle" else None)
+    set_flat_routing(mode == "routed")
     eos = tokenizer.eos_token_id
     for _ in range(max_new_tokens - 1):
         out = model(next_token, past_key_values=cache, use_cache=True)
