@@ -158,9 +158,10 @@ def main() -> None:
     gate1_error = decode_parity(args.prefix_tokens)
     gate2_prefix = args.hot_window + args.retrieval_pages * args.page_size
     gate2_error = decode_parity(gate2_prefix)
-    # bf16 mantissa is ~3 digits, so even a correct binding shows ~1e-1 absolute
-    # logit difference vs eager; fp32 is far tighter.
-    parity_tolerance = 1e-3 if args.dtype == "float32" else 1e-1
+    # bf16 mantissa is ~3 digits, so even a correct binding shows ~0.1-0.2 absolute
+    # logit difference vs eager (the core's fp32 softmax vs eager's bf16 softmax);
+    # fp32 is far tighter. A real binding bug differs by the logit magnitude (10s+).
+    parity_tolerance = 1e-3 if args.dtype == "float32" else 1.0
     report = {
         "model": args.model,
         "hot_window": args.hot_window,
