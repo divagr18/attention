@@ -58,7 +58,7 @@ def local_causal_prefill_kernel(
     tl.store(output_ptr + query_base + dim_offsets, accumulator / running_sum, mask=dim_offsets < head_dim)
 
 
-def local_causal_prefill(query: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, window: int) -> torch.Tensor:
+def local_causal_prefill(query: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, window: int, block_candidates: int | None = None, num_warps: int = 4) -> torch.Tensor:
     batch, heads, context, head_dim = query.shape
     if not (query.is_cuda and query.is_contiguous() and keys.is_contiguous() and values.is_contiguous()):
         raise ValueError("contiguous CUDA tensors are required")
@@ -66,7 +66,8 @@ def local_causal_prefill(query: torch.Tensor, keys: torch.Tensor, values: torch.
         raise ValueError("unsupported Q/K/V shape")
     output = torch.empty_like(query)
     # Smaller candidate blocks keep register pressure manageable at large head_dim.
-    block_candidates = 128 if head_dim <= 64 else 32
+    if block_candidates is None:
+        block_candidates = 128 if head_dim <= 64 else 32
     local_causal_prefill_kernel[(batch * heads * context,)](
         query,
         keys,
@@ -78,7 +79,7 @@ def local_causal_prefill(query: torch.Tensor, keys: torch.Tensor, values: torch.
         head_dim=head_dim,
         block_candidates=block_candidates,
         block_dim=triton.next_power_of_2(head_dim),
-        num_warps=4,
+        num_warps=num_warps,
     )
     return output
 
@@ -112,6 +113,8 @@ def main() -> None:
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--head-dim", type=int, default=16)
     parser.add_argument("--iterations", type=int, default=100)
+    parser.add_argument("--block-candidates", type=int, default=None, help="Override candidate block size (kernel tuning).")
+    parser.add_argument("--num-warps", type=int, default=4, help="Triton warps per program (kernel tuning).")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.window % 128:
@@ -125,12 +128,12 @@ def main() -> None:
     # allocating an impractical dense score matrix at the benchmark context.
     small = min(args.context, 256)
     torch.testing.assert_close(
-        local_causal_prefill(query[:, :, :small].contiguous(), keys[:, :, :small].contiguous(), values[:, :, :small].contiguous(), min(args.window, small)),
+        local_causal_prefill(query[:, :, :small].contiguous(), keys[:, :, :small].contiguous(), values[:, :, :small].contiguous(), min(args.window, small), args.block_candidates, args.num_warps),
         local_reference(query[:, :, :small], keys[:, :, :small], values[:, :, :small], min(args.window, small)),
         rtol=2e-2,
         atol=2e-2,
     )
-    local_ms = benchmark(lambda: local_causal_prefill(query, keys, values, args.window), args.iterations)
+    local_ms = benchmark(lambda: local_causal_prefill(query, keys, values, args.window, args.block_candidates, args.num_warps), args.iterations)
     dense_ms = benchmark(lambda: F.scaled_dot_product_attention(query, keys, values, is_causal=True), args.iterations)
     report = {
         "context": args.context,
