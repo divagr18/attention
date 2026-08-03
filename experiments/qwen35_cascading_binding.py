@@ -113,16 +113,17 @@ def register_cascading_attention(config: CascadingAttentionConfig) -> None:
     ALL_ATTENTION_FUNCTIONS["cascading"] = make_cascading_attention(config)
 
 
-def _load(model: str):
+def _load(model: str, dtype: torch.dtype):
     from transformers import AutoModelForCausalLM
 
-    return AutoModelForCausalLM.from_pretrained(model, dtype=torch.float32, attn_implementation="eager").cuda().eval()
+    return AutoModelForCausalLM.from_pretrained(model, dtype=dtype, attn_implementation="eager").cuda().eval()
 
 
 @torch.no_grad()
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="Qwen/Qwen3.5-4B")
+    parser.add_argument("--dtype", choices=("bfloat16", "float32"), default="bfloat16")
     parser.add_argument("--prefix-tokens", type=int, default=8, help="Gate 1 prefix length (below hot-window so page_count=0).")
     parser.add_argument("--hot-window", type=int, default=512)
     parser.add_argument("--page-size", type=int, default=128)
@@ -139,7 +140,7 @@ def main() -> None:
         tree_beam=args.retrieval_pages,
     )
     register_cascading_attention(core_config)
-    model = _load(args.model)
+    model = _load(args.model, getattr(torch, args.dtype))
     vocab = getattr(model.config, "vocab_size", None) or model.config.text_config.vocab_size
 
     def decode_parity(prefix_len: int) -> float:
@@ -157,6 +158,9 @@ def main() -> None:
     gate1_error = decode_parity(args.prefix_tokens)
     gate2_prefix = args.hot_window + args.retrieval_pages * args.page_size
     gate2_error = decode_parity(gate2_prefix)
+    # bf16 mantissa is ~3 digits, so even a correct binding shows ~1e-1 absolute
+    # logit difference vs eager; fp32 is far tighter.
+    parity_tolerance = 1e-3 if args.dtype == "float32" else 1e-1
     report = {
         "model": args.model,
         "hot_window": args.hot_window,
@@ -166,7 +170,7 @@ def main() -> None:
         "gate1_max_abs_error": gate1_error,
         "gate2_prefix_tokens": gate2_prefix,
         "gate2_max_abs_error": gate2_error,
-        "parity": gate1_error < 1e-3 and gate2_error < 1e-3,
+        "parity": gate1_error < parity_tolerance and gate2_error < parity_tolerance,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
