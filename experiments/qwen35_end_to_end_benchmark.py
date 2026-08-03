@@ -27,14 +27,19 @@ from qwen35_niah_eval import build_niah, first_number
 @torch.no_grad()
 def time_forward(model, input_ids, impl, decode_steps):
     model.config._attn_implementation = impl
-    out = model(input_ids, use_cache=True)  # warmup (compiles the cascading prefill kernel)
+    # Time prefill through the backbone only; the full-sequence lm_head would
+    # materialize [seq, vocab] logits (tens of GiB at long context) and is not
+    # part of the attention/DeltaNet prefill we are measuring.
+    backbone = model.model
+    backbone(input_ids, use_cache=True)  # warmup (compiles the cascading prefill kernel)
     torch.cuda.synchronize()
     start = time.perf_counter()
-    out = model(input_ids, use_cache=True)
+    out = backbone(input_ids, use_cache=True)
     cache = out.past_key_values
     torch.cuda.synchronize()
     prefill_ms = (time.perf_counter() - start) * 1000
-    next_token = out.logits[:, -1:, :].argmax(dim=-1)
+    logits = model.lm_head(out.last_hidden_state[:, -1:, :].to(model.lm_head.weight.dtype))
+    next_token = logits.argmax(dim=-1)
     generated = [next_token.item()]
     torch.cuda.synchronize()
     start = time.perf_counter()
