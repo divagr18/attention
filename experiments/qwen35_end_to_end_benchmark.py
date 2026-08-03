@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""End-to-end dense-vs-cascading benchmark on NIAH.
+
+Measures prefill and decode latency plus answer accuracy for:
+- dense: SDPA prefill + SDPA decode (full attention throughout).
+- cascading: fused local-window prefill + routed decode (local window plus
+  flat top-k pages).
+The prefill speedup is the subquadratic claim; the decode speedup is the
+retrieval claim; accuracy confirms the cascading path preserves quality.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import time
+from pathlib import Path
+
+import torch
+
+from cascading_kv_attention import CascadingAttentionConfig
+from qwen35_cascading_binding import register_cascading_attention, set_flat_routing, set_oracle_pages, set_router_weights
+from qwen35_niah_eval import build_niah, first_number
+
+
+@torch.no_grad()
+def time_forward(model, input_ids, impl, decode_steps):
+    model.config._attn_implementation = impl
+    out = model(input_ids, use_cache=True)  # warmup (compiles the cascading prefill kernel)
+    torch.cuda.synchronize()
+    start = time.perf_counter()
+    out = model(input_ids, use_cache=True)
+    cache = out.past_key_values
+    torch.cuda.synchronize()
+    prefill_ms = (time.perf_counter() - start) * 1000
+    next_token = out.logits[:, -1:, :].argmax(dim=-1)
+    generated = [next_token.item()]
+    torch.cuda.synchronize()
+    start = time.perf_counter()
+    for _ in range(decode_steps):
+        out = model(next_token, past_key_values=cache, use_cache=True)
+        cache = out.past_key_values
+        next_token = out.logits[:, -1:, :].argmax(dim=-1)
+        generated.append(next_token.item())
+    torch.cuda.synchronize()
+    decode_ms = (time.perf_counter() - start) * 1000
+    return prefill_ms, decode_ms / decode_steps, generated
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", default="Qwen/Qwen3.5-4B")
+    parser.add_argument("--dtype", choices=("bfloat16", "float32"), default="bfloat16")
+    parser.add_argument("--contexts", type=int, nargs="+", default=[32768, 65536])
+    parser.add_argument("--hot-window", type=int, default=512)
+    parser.add_argument("--page-size", type=int, default=128)
+    parser.add_argument("--retrieval-pages", type=int, default=4)
+    parser.add_argument("--routing-rotary-dim", type=int, default=64)
+    parser.add_argument("--router-weights", type=Path, default=None)
+    parser.add_argument("--decode-steps", type=int, default=16)
+    parser.add_argument("--depth", type=float, default=0.5)
+    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    core_config = CascadingAttentionConfig(
+        hot_window=args.hot_window,
+        page_size=args.page_size,
+        retrieval_pages=args.retrieval_pages,
+        tree_beam=args.retrieval_pages,
+        routing_rotary_dim=args.routing_rotary_dim,
+    )
+    register_cascading_attention(core_config)
+    if args.router_weights is not None:
+        set_router_weights(torch.load(args.router_weights, weights_only=True))
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    model = AutoModelForCausalLM.from_pretrained(args.model, dtype=getattr(torch, args.dtype), attn_implementation="sdpa").cuda().eval()
+
+    results = []
+    with torch.no_grad():
+        for context in args.contexts:
+            number = random.randint(100, 999)
+            input_ids, _, _ = build_niah(tokenizer, context, args.depth, number)
+            answer = str(number)
+            row = {"context": context, "answer": answer}
+
+            prefill_ms, decode_ms, generated = time_forward(model, input_ids, "sdpa", args.decode_steps)
+            row["dense_prefill_ms"] = prefill_ms
+            row["dense_decode_ms_per_step"] = decode_ms
+            row["dense_correct"] = int(first_number(tokenizer.decode(generated, skip_special_tokens=True)) == answer)
+
+            set_oracle_pages(None)
+            set_flat_routing(True)
+            prefill_ms, decode_ms, generated = time_forward(model, input_ids, "cascading", args.decode_steps)
+            set_flat_routing(False)
+            row["cascading_prefill_ms"] = prefill_ms
+            row["cascading_decode_ms_per_step"] = decode_ms
+            row["cascading_correct"] = int(first_number(tokenizer.decode(generated, skip_special_tokens=True)) == answer)
+
+            row["prefill_speedup"] = row["dense_prefill_ms"] / row["cascading_prefill_ms"]
+            row["decode_speedup"] = row["dense_decode_ms_per_step"] / row["cascading_decode_ms_per_step"]
+            results.append(row)
+            print(json.dumps(row, indent=2), flush=True)
+
+    report = {
+        "hot_window": args.hot_window,
+        "page_size": args.page_size,
+        "retrieval_pages": args.retrieval_pages,
+        "decode_steps": args.decode_steps,
+        "depth": args.depth,
+        "results": results,
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

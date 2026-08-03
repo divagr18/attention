@@ -65,9 +65,10 @@ def local_causal_prefill(query: torch.Tensor, keys: torch.Tensor, values: torch.
     if keys.shape != query.shape or values.shape != query.shape or head_dim > 256:
         raise ValueError("unsupported Q/K/V shape")
     output = torch.empty_like(query)
-    # Smaller candidate blocks keep register pressure manageable at large head_dim.
+    # Smaller candidate blocks keep register pressure manageable at large head_dim;
+    # 64 was fastest at head_dim 256 (16/32 under-utilize, 128 spills again).
     if block_candidates is None:
-        block_candidates = 128 if head_dim <= 64 else 32
+        block_candidates = 128 if head_dim <= 64 else 64
     local_causal_prefill_kernel[(batch * heads * context,)](
         query,
         keys,
