@@ -90,8 +90,11 @@ def main() -> None:
     with torch.no_grad():
         for context in args.contexts:
             number = random.randint(100, 999)
-            input_ids, _, _ = build_niah(tokenizer, context, args.depth, number)
+            input_ids, needle_position, needle_len = build_niah(tokenizer, context, args.depth, number)
             answer = str(number)
+            start_page = needle_position // args.page_size
+            end_page = (needle_position + needle_len - 1) // args.page_size
+            oracle_pages = list(range(start_page, end_page + 1))
             row = {"context": context, "answer": answer}
 
             prefill_ms, decode_ms, generated = time_forward(model, input_ids, "sdpa", args.decode_steps)
@@ -99,10 +102,13 @@ def main() -> None:
             row["dense_decode_ms_per_step"] = decode_ms
             row["dense_correct"] = int(first_number(tokenizer.decode(generated, skip_special_tokens=True)) == answer)
 
-            set_oracle_pages(None)
-            set_flat_routing(True)
-            prefill_ms, decode_ms, generated = time_forward(model, input_ids, "cascading", args.decode_steps)
+            # First demonstration uses the oracle (force the needle's page): the
+            # untrained Llama router would answer incorrectly. Oracle and routed
+            # have the same retrieval latency, so the speedup measurement is valid.
+            set_oracle_pages(oracle_pages)
             set_flat_routing(False)
+            prefill_ms, decode_ms, generated = time_forward(model, input_ids, "cascading", args.decode_steps)
+            set_oracle_pages(None)
             row["cascading_prefill_ms"] = prefill_ms
             row["cascading_decode_ms_per_step"] = decode_ms
             row["cascading_correct"] = int(first_number(tokenizer.decode(generated, skip_special_tokens=True)) == answer)
