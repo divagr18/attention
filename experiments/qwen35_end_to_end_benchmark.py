@@ -43,17 +43,18 @@ def make_static_cache(model, max_cache_len):
 
 
 @torch.no_grad()
-def time_forward(model, input_ids, impl, decode_steps, decode_impl=None):
+def time_forward(model, input_ids, impl, decode_steps, decode_impl=None, static_cache=True):
     model.config._attn_implementation = impl
     # Time prefill through the backbone only; the full-sequence lm_head would
     # materialize [seq, vocab] logits (tens of GiB at long context) and is not
     # part of the attention prefill we are measuring.
     backbone = model.model
     backbone(input_ids, use_cache=False)  # warmup without allocating cache memory
-    static_cache = make_static_cache(model, input_ids.size(1) + decode_steps + 8)
+    cache = make_static_cache(model, input_ids.size(1) + decode_steps + 8) if static_cache else None
     torch.cuda.synchronize()
     start = time.perf_counter()
-    out = backbone(input_ids, past_key_values=static_cache, use_cache=True)
+    out = backbone(input_ids, past_key_values=cache, use_cache=True)
+    cache = out.past_key_values
     torch.cuda.synchronize()
     prefill_ms = (time.perf_counter() - start) * 1000
     logits = model.lm_head(out.last_hidden_state[:, -1:, :].to(model.lm_head.weight.dtype))
@@ -64,7 +65,8 @@ def time_forward(model, input_ids, impl, decode_steps, decode_impl=None):
     torch.cuda.synchronize()
     start = time.perf_counter()
     for _ in range(decode_steps):
-        out = model(next_token, past_key_values=static_cache, use_cache=True)
+        out = model(next_token, past_key_values=cache, use_cache=True)
+        cache = out.past_key_values
         next_token = out.logits[:, -1:, :].argmax(dim=-1)
         generated.append(next_token.item())
     torch.cuda.synchronize()
@@ -150,7 +152,7 @@ def main() -> None:
                 "needle_in_retrieved_pages": int(str(number) in retrieved_text),
             }
 
-            prefill_ms, decode_ms, generated = time_forward(model, input_ids, "sdpa", args.decode_steps)
+            prefill_ms, decode_ms, generated = time_forward(model, input_ids, "sdpa", args.decode_steps, static_cache=False)
             row["dense_prefill_ms"] = prefill_ms
             row["dense_decode_ms_per_step"] = decode_ms
             dense_text = tokenizer.decode(generated, skip_special_tokens=True)
@@ -196,6 +198,8 @@ def main() -> None:
         "depth": args.depth,
         "oracle_window": args.oracle_window,
         "oracle_all_pages": args.oracle_all_pages,
+        "dense_cache": "dynamic",
+        "cascading_cache": "static",
         "results": results,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

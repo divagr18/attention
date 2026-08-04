@@ -41,6 +41,7 @@ class CascadingKVAttention(nn.Module):
         self.page_summary = nn.Linear(2 * channels, channels, bias=False)
         self.internal_summary = nn.Linear(2 * channels, channels, bias=False)
         self.query_proj = nn.Linear(channels, channels, bias=False)
+        self._token_offsets: Tensor | None = None
 
     def make_tree(self, router_keys: Tensor) -> HierarchicalPageTree:
         """Create an offline/static tree from [batch, pages, channels] keys.
@@ -81,11 +82,15 @@ class CascadingKVAttention(nn.Module):
         if page_indices is not None:
             if paged == 0:
                 raise ValueError("force_page_indices requires a non-empty paged prefix")
-            key_pages = keys[:, :, :paged].view(keys.size(0), keys.size(1), page_count, self.config.page_size, keys.size(-1)).permute(0, 2, 1, 3, 4)
-            value_pages = values[:, :, :paged].view(values.size(0), values.size(1), page_count, self.config.page_size, values.size(-1)).permute(0, 2, 1, 3, 4)
-            batch = torch.arange(keys.size(0), device=keys.device).unsqueeze(1)
-            retrieved_keys = key_pages[batch, page_indices].permute(0, 2, 1, 3, 4).flatten(start_dim=2, end_dim=3)
-            retrieved_values = value_pages[batch, page_indices].permute(0, 2, 1, 3, 4).flatten(start_dim=2, end_dim=3)
+            # Token-index gather reads only the selected pages, so it works on
+            # strided static-cache views without copying the whole paged prefix
+            # (the view/permute path forced a full-prefix copy every decode step).
+            if self._token_offsets is None or self._token_offsets.device != keys.device:
+                self._token_offsets = torch.arange(self.config.page_size, device=keys.device)
+            token_idx = (page_indices.unsqueeze(-1) * self.config.page_size + self._token_offsets).flatten(1)
+            gather_idx = token_idx[:, None, :, None].expand(keys.size(0), keys.size(1), token_idx.size(1), keys.size(-1))
+            retrieved_keys = keys.gather(2, gather_idx)
+            retrieved_values = values.gather(2, gather_idx)
             candidates_k = torch.cat((local_k, retrieved_keys), dim=2)
             candidates_v = torch.cat((local_v, retrieved_values), dim=2)
         else:

@@ -1279,3 +1279,40 @@ synchronous CPU→GPU oracle-index tensor construction). Fix in flight:
 StaticCache (preallocated, in-place writes) for both conditions plus a cached
 oracle index tensor; after that, fusing gather+attention into the existing
 triton_paged_attention kernel is what should put cascading clearly below dense.
+
+## E37 — Static-cache decode: first decode speedups, and two measurement corrections
+
+### Result (oracle = BOS + needle page, depth 0.5, StaticCache both conditions)
+
+| Context | dense decode | cascading decode | decode speedup | sdpa-prefill + casc-decode |
+|---|---:|---:|---:|---:|
+| 32K | 113.0 ms | 48.8 ms | 2.31x | correct = 1 |
+| 64K | 185.4 ms | 53.9 ms | 3.44x | correct = 1 |
+
+First decode speedups, and the speedup grows with context (cascading decode is
+nearly constant 48.8 → 53.9 ms while dense grows 113 → 185 ms) — the retrieval
+scaling claim.
+
+### Interpretation and corrections
+
+Two measurement artifacts in this run, fixed before the next:
+
+1. The dense StaticCache baseline is not the stock dense path: SDPA over the
+   preallocated buffer (explicit mask, strided K/V) ran 2.6x slower than
+   DynamicCache+SDPA (113 ms vs the earlier 43.3 ms at 32K). The honest dense
+   baseline is the stock framework path, so dense now runs DynamicCache and
+   only the cascading conditions run StaticCache; the report records
+   `dense_cache`/`cascading_cache`.
+2. Cascading decode still contained a full-cache copy: the binding called
+   `key.contiguous()` on the strided static buffer and the core's gather used
+   `view`/`permute`/index, both of which materialize the whole seen prefix
+   every step (4.3/8.6 GB at 32K/64K). That is why cascading did not drop to
+   the ~15–25 ms its 768-token candidate set should cost, and why 64K was
+   +5 ms over 32K. The gather is now token-index based (`gather` over the
+   selected-page token indices only, strided-safe), and the decode path no
+   longer materializes full-cache contiguous copies.
+
+Also recorded: StaticCache returns the full preallocated buffer to the
+attention function, not the seen prefix; the binding slices K/V to
+`position_ids[-1] + 1` (verified against transformers v5 Llama source). The
+slice syncs one scalar per layer; the fused decode kernel removes this.

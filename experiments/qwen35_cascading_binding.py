@@ -119,7 +119,7 @@ def make_cascading_attention(config: CascadingAttentionConfig):
                     search_query = core.query_proj(search_query)
                     flat_scores = torch.einsum("bd,bpd->bp", search_query, page_keys) / (query.size(-1) ** 0.5)
                     force_page_indices = flat_scores.topk(min(config.retrieval_pages, page_count), dim=-1).indices
-        output, _ = core(query[:, :, 0, :].contiguous(), key.contiguous(), value.contiguous(), tree=tree, force_page_indices=force_page_indices, page_count=page_count)
+        output, _ = core(query[:, :, 0, :].contiguous(), key, value, tree=tree, force_page_indices=force_page_indices, page_count=page_count)
         return output.unsqueeze(2).transpose(1, 2).contiguous(), None
 
     return cascading_attention_forward
