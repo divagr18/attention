@@ -68,6 +68,7 @@ def main() -> None:
     parser.add_argument("--decode-steps", type=int, default=16)
     parser.add_argument("--depth", type=float, default=0.5)
     parser.add_argument("--oracle-all-pages", action="store_true", help="Diagnostic: oracle retrieves all pages, testing whether the model needs more than the needle page.")
+    parser.add_argument("--oracle-window", type=int, default=0, help="Extra pages retrieved on each side of the needle pages (0 = needle pages only).")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -97,12 +98,31 @@ def main() -> None:
             answer = str(number)
             start_page = needle_position // args.page_size
             end_page = (needle_position + needle_len - 1) // args.page_size
+            page_count = (input_ids.size(1) - args.hot_window) // args.page_size
             if args.oracle_all_pages:
-                page_count = (context - args.hot_window) // args.page_size
                 oracle_pages = list(range(page_count))
             else:
-                oracle_pages = list(range(start_page, end_page + 1))
-            row = {"context": context, "answer": answer}
+                oracle_pages = list(
+                    range(
+                        max(0, start_page - args.oracle_window),
+                        min(end_page + args.oracle_window + 1, page_count),
+                    )
+                )
+            # Diagnostic: decode the retrieved span and confirm the needle text
+            # is actually inside it. If false, correct=0 is a page-mapping bug,
+            # not a model limitation.
+            retrieved_text = tokenizer.decode(
+                input_ids[0, oracle_pages[0] * args.page_size : (oracle_pages[-1] + 1) * args.page_size].tolist(),
+                skip_special_tokens=True,
+            )
+            row = {
+                "context": context,
+                "answer": answer,
+                "needle_position": needle_position,
+                "needle_pages": [start_page, end_page],
+                "oracle_pages": oracle_pages,
+                "needle_in_retrieved_pages": int(str(number) in retrieved_text),
+            }
 
             prefill_ms, decode_ms, generated = time_forward(model, input_ids, "sdpa", args.decode_steps)
             row["dense_prefill_ms"] = prefill_ms
@@ -140,6 +160,8 @@ def main() -> None:
         "retrieval_pages": args.retrieval_pages,
         "decode_steps": args.decode_steps,
         "depth": args.depth,
+        "oracle_window": args.oracle_window,
+        "oracle_all_pages": args.oracle_all_pages,
         "results": results,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
