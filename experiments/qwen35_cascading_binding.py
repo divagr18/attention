@@ -54,6 +54,14 @@ def make_cascading_attention(config: CascadingAttentionConfig):
     def cascading_attention_forward(module, query, key, value, attention_mask=None, dropout=0.0, scaling=None, **kwargs):
         heads = query.size(1)
         kv_heads = key.size(1)
+        position_ids = kwargs.get("position_ids")
+        if position_ids is not None:
+            # StaticCache hands the attention fn the full preallocated buffer,
+            # not the seen prefix; slice to the true length (last position + 1).
+            seen = int(position_ids[0, -1]) + 1
+            if key.size(2) > seen:
+                key = key[:, :, :seen]
+                value = value[:, :, :seen]
         if query.size(2) != 1:
             # Prefill: fused local causal-window attention (subquadratic in context).
             if heads != kv_heads:
