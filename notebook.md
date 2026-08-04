@@ -1316,3 +1316,40 @@ Also recorded: StaticCache returns the full preallocated buffer to the
 attention function, not the seen prefix; the binding slices K/V to
 `position_ids[-1] + 1` (verified against transformers v5 Llama source). The
 slice syncs one scalar per layer; the fused decode kernel removes this.
+
+## E38 — Weight-bound decode floor; the speedup is a long-context crossover
+
+### Result (gather fix in: token-index gather, no full-cache copies; dense back
+to stock DynamicCache+SDPA)
+
+| Context | dense decode | cascading decode | speedup | sdpa+casc-decode |
+|---|---:|---:|---:|---:|
+| 32K | 46.2 ms | 49.8 ms | 0.93x | correct = 1 |
+| 64K | 59.9 ms | 45.9 ms | 1.31x | correct = 1 |
+
+The gather fix removed the remaining context-scaling cost from cascading decode
+(flat 46–50 ms across 2x context), but it did not collapse it — and that
+decomposition exposed the floor.
+
+### Interpretation
+
+Single-token decode of an 8B bf16 model is weight-loading bound: every step
+reads ~16 GB of weights (8B params / 32 layers ≈ 0.5 GB of projections+MLP per
+layer). On this GPU that floor is ~38–42 ms/step. Everything else stacks on
+top:
+
+- dense = floor + DynamicCache cat (4.3/8.6 GB per step at 32K/64K) + dense
+  SDPA over the full cache → 46.2 / 59.9 ms.
+- cascading = floor + per-layer Python/launch overhead (~15 small kernels,
+  position-id syncs) → 49.8 / 45.9 ms; the candidate-set attention over 768
+  tokens is negligible.
+
+At 32K the dense attention+cat component (~6–8 ms) is smaller than our
+overhead (~10 ms), so dense wins. The crossover is where dense's cache costs
+outgrow our overhead — already visible at 64K (1.31x) and it grows monotonically
+with context, since dense pays cat + full-cache attention linearly while
+cascading stays flat. Two follow-ons: (1) measure 128K/256K (needs a >=48 GB
+pod: 17.2 GB static buffer at 128K + 16 GB weights + prefill activations);
+(2) fuse gather+attention into the triton_paged_attention kernel and drop the
+per-layer launch overhead, which buys at most ~8 ms but is the only lever on
+the cascading side of the ratio.
