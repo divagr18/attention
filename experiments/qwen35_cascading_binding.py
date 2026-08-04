@@ -20,6 +20,7 @@ import torch
 from cascading_kv_attention import CascadingAttentionConfig, CascadingKVAttention
 
 _ORACLE_PAGES: list[int] | None = None
+_ORACLE_TENSOR_CACHE: dict[tuple[int, ...], torch.Tensor] = {}
 
 
 def set_oracle_pages(pages: list[int] | None) -> None:
@@ -81,7 +82,11 @@ def make_cascading_attention(config: CascadingAttentionConfig):
                 # rebuild is what makes oracle decode latency match routed decode.
                 valid_pages = [page for page in _ORACLE_PAGES if 0 <= page < page_count]
                 if valid_pages:
-                    force_page_indices = torch.tensor(valid_pages, device=key.device, dtype=torch.long).unsqueeze(0).expand(key.size(0), len(valid_pages))
+                    cached_indices = _ORACLE_TENSOR_CACHE.get(tuple(valid_pages))
+                    if cached_indices is None:
+                        cached_indices = torch.tensor(valid_pages, device=key.device, dtype=torch.long)
+                        _ORACLE_TENSOR_CACHE[tuple(valid_pages)] = cached_indices
+                    force_page_indices = cached_indices.unsqueeze(0).expand(key.size(0), cached_indices.size(0))
             if force_page_indices is None:
                 # Mean/max page summaries drive routing; the core gathers exact K/V.
                 # Routing features stay head-expanded to match the trained router.

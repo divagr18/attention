@@ -24,18 +24,36 @@ from qwen35_cascading_binding import register_cascading_attention, set_flat_rout
 from qwen35_niah_eval import build_niah, first_number
 
 
+def make_static_cache(model, max_cache_len):
+    # StaticCache (preallocated, in-place writes) instead of DynamicCache: the
+    # per-step torch.cat re-copy of the whole cache dominated decode latency for
+    # both dense and cascading. Signature varies across transformers 5.x, so
+    # pass only the kwargs this build accepts.
+    import inspect
+
+    from transformers import StaticCache
+
+    params = inspect.signature(StaticCache.__init__).parameters
+    kwargs = {"config": model.config, "max_cache_len": max_cache_len}
+    has_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    for name, value in (("batch_size", 1), ("device", "cuda"), ("dtype", model.dtype)):
+        if has_var_kw or name in params:
+            kwargs[name] = value
+    return StaticCache(**kwargs)
+
+
 @torch.no_grad()
 def time_forward(model, input_ids, impl, decode_steps, decode_impl=None):
     model.config._attn_implementation = impl
     # Time prefill through the backbone only; the full-sequence lm_head would
     # materialize [seq, vocab] logits (tens of GiB at long context) and is not
-    # part of the attention/DeltaNet prefill we are measuring.
+    # part of the attention prefill we are measuring.
     backbone = model.model
-    backbone(input_ids, use_cache=True)  # warmup
+    backbone(input_ids, use_cache=False)  # warmup without allocating cache memory
+    static_cache = make_static_cache(model, input_ids.size(1) + decode_steps + 8)
     torch.cuda.synchronize()
     start = time.perf_counter()
-    out = backbone(input_ids, use_cache=True)
-    cache = out.past_key_values
+    out = backbone(input_ids, past_key_values=static_cache, use_cache=True)
     torch.cuda.synchronize()
     prefill_ms = (time.perf_counter() - start) * 1000
     logits = model.lm_head(out.last_hidden_state[:, -1:, :].to(model.lm_head.weight.dtype))
@@ -46,8 +64,7 @@ def time_forward(model, input_ids, impl, decode_steps, decode_impl=None):
     torch.cuda.synchronize()
     start = time.perf_counter()
     for _ in range(decode_steps):
-        out = model(next_token, past_key_values=cache, use_cache=True)
-        cache = out.past_key_values
+        out = model(next_token, past_key_values=static_cache, use_cache=True)
         next_token = out.logits[:, -1:, :].argmax(dim=-1)
         generated.append(next_token.item())
     torch.cuda.synchronize()

@@ -1245,3 +1245,37 @@ side also needs routing (at least over the query span) for the subquadratic
 prefill claim. Remaining decode overhead: GQA `repeat_interleave` copies the
 full cache every step (83.8 ms vs 43.5 ms dense at 32K); the core now uses a
 GQA-native grouped softmax instead.
+
+## E36 — Cost decomposition of decode; static cache in flight
+
+### Purpose
+
+Remove the remaining per-decode-step overhead after E35's oracle-skip, with
+oracle = BOS page + needle page (2 pages, 768 candidate tokens with the hot
+window).
+
+### Result
+
+| Context | dense decode | cascading decode | sdpa-prefill + casc-decode | prefill speedup |
+|---|---:|---:|---:|---:|
+| 32K | 43.3 ms | 54.2 ms | correct = 1 | 0.90 |
+| 64K | 62.5 ms | 72.1 ms | correct = 1 | 1.20 |
+
+The GQA fix removed ~30 ms/step (83.8 → 54.2 at 32K). Accuracy holds at both
+contexts. 64K prefill is the first speed win (1.20×, the quadratic SDPA cost
+overtaking the local kernel between 32K and 64K) — speed only; that prefill
+path's quality is still broken per the E35 addendum.
+
+### Interpretation
+
+Decode is still below dense because both conditions pay cache-management cost
+that has nothing to do with attention: DynamicCache.update does a per-step
+torch.cat that re-copies the entire cache (4.3 GB/step at 32K, 8.6 GB at 64K).
+Evidence: dense and cascading both grow ~18–19 ms when the context doubles
+(43.3→62.5, 54.2→72.1), matching the cat traffic increase, and the
+fixed-candidate cascading path grows by the same amount. The remaining ~10 ms
+gap is per-layer Python/launch overhead (~15 small kernels/layer plus a
+synchronous CPU→GPU oracle-index tensor construction). Fix in flight:
+StaticCache (preallocated, in-place writes) for both conditions plus a cached
+oracle index tensor; after that, fusing gather+attention into the existing
+triton_paged_attention kernel is what should put cascading clearly below dense.
