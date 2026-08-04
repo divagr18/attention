@@ -1230,3 +1230,18 @@ permanently resident, outside the retrieval budget. Latency note: the binding
 was rebuilding page summaries + the routing tree every decode step even in
 oracle mode (177 ms/step vs 42 ms dense); the oracle path now skips straight to
 gather, so decode latency is re-measured next.
+
+### Addendum — why full-cascading (local prefill) still fails
+
+With sink page + needle page, `sdpa_prefill_cascading_decode_correct = 1` but
+the full-cascading condition (`cascading_correct`) is still 0, generating
+"What is the magic number? This is generic filler text…" — the model re-asks,
+then continues filler. Mechanism: with local-window prefill, the final prefill
+position never attends to the needle (it is 16K away), so token 1 is generated
+blind and the model enters filler-continuation mode before decode-time
+retrieval can help. E32–E34 never exposed this because they prefilled dense.
+Consequence: decode-only retrieval is the current demonstration; the prefill
+side also needs routing (at least over the query span) for the subquadratic
+prefill claim. Remaining decode overhead: GQA `repeat_interleave` copies the
+full cache every step (83.8 ms vs 43.5 ms dense at 32K); the core now uses a
+GQA-native grouped softmax instead.

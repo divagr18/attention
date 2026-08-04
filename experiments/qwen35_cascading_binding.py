@@ -53,12 +53,12 @@ def make_cascading_attention(config: CascadingAttentionConfig):
     def cascading_attention_forward(module, query, key, value, attention_mask=None, dropout=0.0, scaling=None, **kwargs):
         heads = query.size(1)
         kv_heads = key.size(1)
-        if heads != kv_heads:
-            groups = heads // kv_heads
-            key = key.repeat_interleave(groups, dim=1)
-            value = value.repeat_interleave(groups, dim=1)
         if query.size(2) != 1:
             # Prefill: fused local causal-window attention (subquadratic in context).
+            if heads != kv_heads:
+                groups = heads // kv_heads
+                key = key.repeat_interleave(groups, dim=1)
+                value = value.repeat_interleave(groups, dim=1)
             from triton_local_prefill import local_causal_prefill
             output = local_causal_prefill(query.contiguous(), key.contiguous(), value.contiguous(), config.hot_window)
             return output.transpose(1, 2).contiguous(), None
@@ -84,8 +84,12 @@ def make_cascading_attention(config: CascadingAttentionConfig):
                     force_page_indices = torch.tensor(valid_pages, device=key.device, dtype=torch.long).unsqueeze(0).expand(key.size(0), len(valid_pages))
             if force_page_indices is None:
                 # Mean/max page summaries drive routing; the core gathers exact K/V.
+                # Routing features stay head-expanded to match the trained router.
+                routing_key = key
+                if heads != kv_heads:
+                    routing_key = key.repeat_interleave(heads // kv_heads, dim=1)
                 paged = page_count * config.page_size
-                page_kv = key[:, :, :paged].view(key.size(0), heads, page_count, config.page_size, key.size(-1))
+                page_kv = routing_key[:, :, :paged].view(key.size(0), heads, page_count, config.page_size, key.size(-1))
                 if config.routing_rotary_dim:
                     # Drop leading RoPE dims so routing is content-based and length-invariant.
                     page_kv = page_kv.clone()

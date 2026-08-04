@@ -91,6 +91,15 @@ class CascadingKVAttention(nn.Module):
         else:
             candidates_k, candidates_v = local_k, local_v
         # Unified softmax in fp32 to match dense eager numerics; cast back after.
-        scores = torch.einsum("bhd,bhld->bhl", query.float(), candidates_k.float()) / math.sqrt(query.size(-1))
-        output = torch.einsum("bhl,bhld->bhd", scores.softmax(dim=-1), candidates_v.float()).to(query.dtype)
-        return output, search
+        scale = math.sqrt(query.size(-1))
+        if query.size(1) == candidates_k.size(1):
+            scores = torch.einsum("bhd,bhld->bhl", query.float(), candidates_k.float()) / scale
+            output = torch.einsum("bhl,bhld->bhd", scores.softmax(dim=-1), candidates_v.float())
+        else:
+            # GQA-native: group query heads by KV head so decode never expands
+            # the full cache (repeat_interleave per step was the decode bottleneck).
+            grouped = query.view(candidates_k.size(0), candidates_k.size(1), query.size(1) // candidates_k.size(1), query.size(-1))
+            scores = torch.einsum("bhgd,bhld->bhgl", grouped.float(), candidates_k.float()) / scale
+            output = torch.einsum("bhgl,bhld->bhgd", scores.softmax(dim=-1), candidates_v.float())
+            output = output.flatten(1, 2)
+        return output.to(query.dtype), search
