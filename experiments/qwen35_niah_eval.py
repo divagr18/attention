@@ -114,6 +114,10 @@ def main() -> None:
             start_page = needle_position // args.page_size
             end_page = (needle_position + needle_len - 1) // args.page_size
             oracle_pages = list(range(start_page, end_page + 1))
+            # E35: pure-attention models need the BOS/attention-sink page resident;
+            # it sits outside the retrieval budget.
+            if start_page > 0:
+                oracle_pages.insert(0, 0)
             while len(oracle_pages) < args.retrieval_pages and oracle_pages[-1] + 1 < page_count:
                 oracle_pages.append(oracle_pages[-1] + 1)
             for mode in MODES:

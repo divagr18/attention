@@ -1183,3 +1183,50 @@ max-similarity over them, instead of one mean/max summary.
 currently uses the single-vector path. **Deferred**: the single-needle thesis
 is proven and the priority is the subquadratic-prefill efficiency measurement.
 Multi-needle discrimination is the next retrieval-quality work item.
+
+## E35 — Llama 3.1 8B NIAH: the BOS/attention-sink page is required
+
+### Purpose
+
+E31–E34 proved oracle == dense on Qwen3.5-4B, a hybrid model whose 24 Gated
+DeltaNet layers carry long-range state outside the attention path. Test the
+same decode-time retrieval on a pure-attention model (Llama 3.1 8B, 32
+full-attention layers, GQA 32:8) where the attention candidate set is the only
+long-range channel.
+
+### Setup
+
+Same NIAH harness (32K context, 128-token pages, 512-token hot window, depth
+0.5). SDPA prefill + cascading decode with oracle page retrieval, plus new
+diagnostics: a decoded content check that the needle text is inside the
+retrieved pages, retrieval-window sweeps (needle page ± N), a page-0 probe, and
+an exclude-the-needle control.
+
+### Result
+
+| Oracle retrieval | correct |
+|---|---:|
+| dense (SDPA decode) | 1 |
+| all 252 pages (≡ dense candidate set) | 1 |
+| needle page only | 0 |
+| needle page ± 1 / ± 2 / ± 4 (3 / 5 / 9 pages) | 0 |
+| page 0 + needle page (2 pages) | 1 |
+| all pages minus the needle page (control) | 0 |
+
+`needle_in_retrieved_pages = 1` in every condition, so the page mapping was
+never the bug. Dense and page-0+needle generated identical text
+(" 254.NNN…"); without the needle the model hallucinated "42" (the control
+confirms no information leak).
+
+### Interpretation
+
+Pure-attention Llama cannot copy the needle unless page 0 (BOS + first tokens)
+is in the candidate set, even when the needle token itself is present: the
+StreamingLLM attention-sink phenomenon, surfaced here at decode time under
+retrieval restriction. Qwen3.5 did not need it (E33) because its DeltaNet
+layers carry global context regardless of page selection, masking sink
+dependence in the eight attention layers. Architectural consequence: page 0 is
+permanently resident, outside the retrieval budget. Latency note: the binding
+was rebuilding page summaries + the routing tree every decode step even in
+oracle mode (177 ms/step vs 42 ms dense); the oracle path now skips straight to
+gather, so decode latency is re-measured next.

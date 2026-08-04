@@ -51,11 +51,12 @@ class CascadingKVAttention(nn.Module):
         """
         return HierarchicalPageTree.from_page_keys(router_keys, fanout=self.config.tree_fanout, aggregate=self.internal_summary)
 
-    def forward(self, query: Tensor, keys: Tensor, values: Tensor, tree: HierarchicalPageTree | None = None, force_page_indices: Tensor | None = None) -> tuple[Tensor, TreeSearch | None]:
+    def forward(self, query: Tensor, keys: Tensor, values: Tensor, tree: HierarchicalPageTree | None = None, force_page_indices: Tensor | None = None, page_count: int | None = None) -> tuple[Tensor, TreeSearch | None]:
         """Attend exactly over local K/V plus selected historical pages.
 
         Shapes are ``query=[B,H,D]`` and ``keys/values=[B,H,L,D]``.  The paged
-        prefix length is ``tree.page_count * page_size``; everything after it is
+        prefix length is ``page_count * page_size`` (explicit ``page_count``, or
+        ``tree.page_count`` when omitted); everything after it is
         the local region (at least ``hot_window`` tokens once the caller appends
         pages as they leave the window).  With no completed pages the core is a
         single dense softmax over the full sequence.  ``force_page_indices``
@@ -65,7 +66,8 @@ class CascadingKVAttention(nn.Module):
         if keys.shape != values.shape or query.ndim != 3 or keys.ndim != 4:
             raise ValueError("expected query [B,H,D] and equal keys/values [B,H,L,D]")
         length = keys.size(2)
-        page_count = 0 if tree is None else tree.page_count
+        if page_count is None:
+            page_count = 0 if tree is None else tree.page_count
         paged = page_count * self.config.page_size
         if paged > length:
             raise ValueError("tree pages exceed available K/V length")
