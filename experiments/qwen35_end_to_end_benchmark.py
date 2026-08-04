@@ -67,6 +67,7 @@ def main() -> None:
     parser.add_argument("--router-weights", type=Path, default=None)
     parser.add_argument("--decode-steps", type=int, default=16)
     parser.add_argument("--depth", type=float, default=0.5)
+    parser.add_argument("--oracle-all-pages", action="store_true", help="Diagnostic: oracle retrieves all pages, testing whether the model needs more than the needle page.")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -96,7 +97,11 @@ def main() -> None:
             answer = str(number)
             start_page = needle_position // args.page_size
             end_page = (needle_position + needle_len - 1) // args.page_size
-            oracle_pages = list(range(start_page, end_page + 1))
+            if args.oracle_all_pages:
+                page_count = (context - args.hot_window) // args.page_size
+                oracle_pages = list(range(page_count))
+            else:
+                oracle_pages = list(range(start_page, end_page + 1))
             row = {"context": context, "answer": answer}
 
             prefill_ms, decode_ms, generated = time_forward(model, input_ids, "sdpa", args.decode_steps)
