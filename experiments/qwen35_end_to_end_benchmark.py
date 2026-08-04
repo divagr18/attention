@@ -69,6 +69,9 @@ def main() -> None:
     parser.add_argument("--depth", type=float, default=0.5)
     parser.add_argument("--oracle-all-pages", action="store_true", help="Diagnostic: oracle retrieves all pages, testing whether the model needs more than the needle page.")
     parser.add_argument("--oracle-window", type=int, default=0, help="Extra pages retrieved on each side of the needle pages (0 = needle pages only).")
+    parser.add_argument("--oracle-include-bos", action="store_true", help="Also retrieve page 0 (BOS/attention-sink page). Tests the sink hypothesis.")
+    parser.add_argument("--oracle-exclude-needle", action="store_true", help="Drop the needle pages from the oracle set. Control: use with --oracle-all-pages.")
+    parser.add_argument("--decode-only", action="store_true", help="Skip the full-cascading (local-prefill) run; keep dense baseline and SDPA-prefill+cascading-decode.")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -108,13 +111,19 @@ def main() -> None:
                         min(end_page + args.oracle_window + 1, page_count),
                     )
                 )
+            if args.oracle_exclude_needle:
+                oracle_pages = [p for p in oracle_pages if not (start_page <= p <= end_page)]
+            if args.oracle_include_bos and oracle_pages and 0 not in oracle_pages:
+                oracle_pages = [0] + oracle_pages
+            if not oracle_pages:
+                raise SystemExit("empty oracle page set: combine --oracle-exclude-needle with --oracle-all-pages")
             # Diagnostic: decode the retrieved span and confirm the needle text
             # is actually inside it. If false, correct=0 is a page-mapping bug,
             # not a model limitation.
-            retrieved_text = tokenizer.decode(
-                input_ids[0, oracle_pages[0] * args.page_size : (oracle_pages[-1] + 1) * args.page_size].tolist(),
-                skip_special_tokens=True,
-            )
+            span_ids = torch.cat(
+                [input_ids[0, p * args.page_size : (p + 1) * args.page_size] for p in oracle_pages]
+            ).tolist()
+            retrieved_text = tokenizer.decode(span_ids, skip_special_tokens=True)
             row = {
                 "context": context,
                 "answer": answer,
@@ -127,18 +136,23 @@ def main() -> None:
             prefill_ms, decode_ms, generated = time_forward(model, input_ids, "sdpa", args.decode_steps)
             row["dense_prefill_ms"] = prefill_ms
             row["dense_decode_ms_per_step"] = decode_ms
-            row["dense_correct"] = int(first_number(tokenizer.decode(generated, skip_special_tokens=True)) == answer)
+            dense_text = tokenizer.decode(generated, skip_special_tokens=True)
+            row["dense_correct"] = int(first_number(dense_text) == answer)
+            row["dense_generated"] = dense_text[:80]
 
             # First demonstration uses the oracle (force the needle's page): the
             # untrained Llama router would answer incorrectly. Oracle and routed
             # have the same retrieval latency, so the speedup measurement is valid.
-            set_oracle_pages(oracle_pages)
-            set_flat_routing(False)
-            prefill_ms, decode_ms, generated = time_forward(model, input_ids, "cascading", args.decode_steps)
-            set_oracle_pages(None)
-            row["cascading_prefill_ms"] = prefill_ms
-            row["cascading_decode_ms_per_step"] = decode_ms
-            row["cascading_correct"] = int(first_number(tokenizer.decode(generated, skip_special_tokens=True)) == answer)
+            if not args.decode_only:
+                set_oracle_pages(oracle_pages)
+                set_flat_routing(False)
+                prefill_ms, decode_ms, generated = time_forward(model, input_ids, "cascading", args.decode_steps)
+                set_oracle_pages(None)
+                cascading_text = tokenizer.decode(generated, skip_special_tokens=True)
+                row["cascading_prefill_ms"] = prefill_ms
+                row["cascading_decode_ms_per_step"] = decode_ms
+                row["cascading_correct"] = int(first_number(cascading_text) == answer)
+                row["cascading_generated"] = cascading_text[:80]
 
             # Diagnostic: SDPA prefill + cascading decode + oracle. Isolates
             # whether correct=0 is the local-window prefill or the selective
@@ -147,10 +161,13 @@ def main() -> None:
             set_flat_routing(False)
             _, _, generated = time_forward(model, input_ids, "sdpa", args.decode_steps, decode_impl="cascading")
             set_oracle_pages(None)
-            row["sdpa_prefill_cascading_decode_correct"] = int(first_number(tokenizer.decode(generated, skip_special_tokens=True)) == answer)
+            decode_diag_text = tokenizer.decode(generated, skip_special_tokens=True)
+            row["sdpa_prefill_cascading_decode_correct"] = int(first_number(decode_diag_text) == answer)
+            row["sdpa_prefill_cascading_decode_generated"] = decode_diag_text[:80]
 
-            row["prefill_speedup"] = row["dense_prefill_ms"] / row["cascading_prefill_ms"]
-            row["decode_speedup"] = row["dense_decode_ms_per_step"] / row["cascading_decode_ms_per_step"]
+            if not args.decode_only:
+                row["prefill_speedup"] = row["dense_prefill_ms"] / row["cascading_prefill_ms"]
+                row["decode_speedup"] = row["dense_decode_ms_per_step"] / row["cascading_decode_ms_per_step"]
             results.append(row)
             print(json.dumps(row, indent=2), flush=True)
 
