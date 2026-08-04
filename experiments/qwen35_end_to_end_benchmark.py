@@ -25,13 +25,13 @@ from qwen35_niah_eval import build_niah, first_number
 
 
 @torch.no_grad()
-def time_forward(model, input_ids, impl, decode_steps):
+def time_forward(model, input_ids, impl, decode_steps, decode_impl=None):
     model.config._attn_implementation = impl
     # Time prefill through the backbone only; the full-sequence lm_head would
     # materialize [seq, vocab] logits (tens of GiB at long context) and is not
     # part of the attention/DeltaNet prefill we are measuring.
     backbone = model.model
-    backbone(input_ids, use_cache=True)  # warmup (compiles the cascading prefill kernel)
+    backbone(input_ids, use_cache=True)  # warmup
     torch.cuda.synchronize()
     start = time.perf_counter()
     out = backbone(input_ids, use_cache=True)
@@ -41,6 +41,8 @@ def time_forward(model, input_ids, impl, decode_steps):
     logits = model.lm_head(out.last_hidden_state[:, -1:, :].to(model.lm_head.weight.dtype))
     next_token = logits.argmax(dim=-1)
     generated = [next_token.item()]
+    if decode_impl is not None:
+        model.config._attn_implementation = decode_impl
     torch.cuda.synchronize()
     start = time.perf_counter()
     for _ in range(decode_steps):
@@ -112,6 +114,15 @@ def main() -> None:
             row["cascading_prefill_ms"] = prefill_ms
             row["cascading_decode_ms_per_step"] = decode_ms
             row["cascading_correct"] = int(first_number(tokenizer.decode(generated, skip_special_tokens=True)) == answer)
+
+            # Diagnostic: SDPA prefill + cascading decode + oracle. Isolates
+            # whether correct=0 is the local-window prefill or the selective
+            # decode/retrieval path.
+            set_oracle_pages(oracle_pages)
+            set_flat_routing(False)
+            _, _, generated = time_forward(model, input_ids, "sdpa", args.decode_steps, decode_impl="cascading")
+            set_oracle_pages(None)
+            row["sdpa_prefill_cascading_decode_correct"] = int(first_number(tokenizer.decode(generated, skip_special_tokens=True)) == answer)
 
             row["prefill_speedup"] = row["dense_prefill_ms"] / row["cascading_prefill_ms"]
             row["decode_speedup"] = row["dense_decode_ms_per_step"] / row["cascading_decode_ms_per_step"]
